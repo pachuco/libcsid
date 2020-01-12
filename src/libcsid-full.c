@@ -1,38 +1,6 @@
 #define LIBCSID_FULL
 #include "libcsid.c"
 
-//----------------------------- SID emulation -----------------------------------------
-
-int ADSRperiods[16] = {9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19532, 31251};
-
-
-void cSID_init(int samplerate)
-{
-    int i;
-    clock_ratio = round(C64_PAL_CPUCLK/samplerate);
-    cutoff_ratio_8580 = -2 * 3.14 * (12500.0 / 2048) / C64_PAL_CPUCLK;
-    cutoff_ratio_6581 = -2 * 3.14 * (20000.0 / 2048) / C64_PAL_CPUCLK;
-    cutoff_bias_6581 = 1 - exp( -2 * 3.14 * 220 / C64_PAL_CPUCLK ); //around 220Hz below treshold
-    
-    createCombinedWF(TriSaw_8580, 0.5, 2.2, 0.9);
-    createCombinedWF(PulseSaw_8580, 0.23, 1.27, 0.55);
-    createCombinedWF(PulseTriSaw_8580, 0.5, 1.6, 0.8);
-    //createCombinedWF_old(TriSaw_8580, 0.8, 2.4, 0.64);
-    //createCombinedWF_old(PulseSaw_8580, 1.4, 1.9, 0.68);
-    //createCombinedWF_old(PulseTriSaw_8580, 0.8, 2.5, 0.64);
-    
-    for(i = 0; i < 9; i++) {
-        ADSRstate[i] = HOLDZERO_BITMASK; envcnt[i] = 0; ratecnt[i] = 0; 
-        phaseaccu[i] = 0; prevaccu[i] = 0; expcnt[i] = 0; 
-        noise_LFSR[i] = 0x7FFFF8; prevwfout[i] = 0;
-    }
-    for(i = 0; i < 3; i++) {
-        sourceMSBrise[i] = 0; sourceMSB[i] = 0;
-        prevlowpass[i] = 0; prevbandpass[i] = 0;
-    }
-    initSID();
-}
-
 int SID(char num, unsigned int baseaddr)
 {
     //better keep these variables static so they won't slow down the routine like if they were internal automatic variables always recreated
@@ -173,12 +141,4 @@ int SID(char num, unsigned int baseaddr)
     output = (nonfilt+filtout) * (sReg[0x18]&0xF) / OUTPUT_SCALEDOWN;
     if (output>=32767) output=32767; else if (output<=-32768) output=-32768; //saturation logic on overload (not needed if the callback handles it)
     return (int)output; // master output
-}
-
-
-
-unsigned int combinedWF(char num, char channel, unsigned int* wfarray, int index, char differ6581, byte freqh)
-{
-    if(differ6581 && SID_model[num]==6581) index &= 0x7FF; 
-    return wfarray[index];
 }

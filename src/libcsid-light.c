@@ -1,43 +1,5 @@
 #include "libcsid.c"
 
-//----------------------------- SID emulation -----------------------------------------
-
-unsigned int TriSaw_8580[4096], PulseSaw_8580[4096], PulseTriSaw_8580[4096];
-#define PERIOD0 CLOCK_RATIO_DEFAULT //max(round(clock_ratio),9)
-#define STEP0 3 //ceil(PERIOD0/9.0)
-float ADSRperiods[16] = {PERIOD0, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19532, 31251};
-byte ADSRstep[16] =   {  STEP0, 1,  1,  1,  1,    1,   1,   1,   1,   1,    1,    1,    1,     1,     1,     1};
-
-
-void cSID_init(int samplerate)
-{
- int i;
- clock_ratio = C64_PAL_CPUCLK/samplerate;
- if (clock_ratio>9) { ADSRperiods[0]=clock_ratio; ADSRstep[0]=ceil(clock_ratio/9.0); }
- else { ADSRperiods[0]=9.0; ADSRstep[0]=1; }
- cutoff_ratio_8580 = -2 * 3.14 * (12500 / 2048) / samplerate; // -2 * 3.14 * ((82000/6.8) / 2048) / samplerate; //approx. 30Hz..12kHz according to datasheet, but only for 6.8nF value, 22nF makes 9Hz...3.7kHz? wrong
- cap_6581_reciprocal = -1000000/CAP_6581; //lighten CPU-load in sample-callback
- cutoff_steepness_6581 = FILTER_DARKNESS_6581*(2048.0-VCR_FET_TRESHOLD); //pre-scale for 0...2048 cutoff-value range //lighten CPU-load in sample-callback
- //cutoff_bottom_6581 = 1 - exp( -1 / (0.000000000470*1500000) / samplerate ); // 1 - exp( -2 * 3.14 * (26000/pow(2,9)/0.47) / samplerate ); //around 140..220Hz cutoff is set by VCR-MOSFET limiter/shunt-resistor (1.5MOhm)
- //cutoff_top_6581 = 20000; //Hz // (26000/0.47);  // 1 - exp( -2 * 3.14 * (26000/0.47) / samplerate);   //cutoff range is 9 octaves stated by datasheet, but process variation might eliminate any filter spec.
- //cutoff_ratio_6581 = -2 * 3.14 * (cutoff_top_6581 / 2048) / samplerate; //(cutoff_top_6581-cutoff_bottom_6581)/(2048.0-192.0); //datasheet: 30Hz..12kHz with 2.2pF -> 140Hz..56kHz with 470pF?
- 
- createCombinedWF(TriSaw_8580, 0.8, 2.4, 0.64);
- createCombinedWF(PulseSaw_8580, 1.4, 1.9, 0.68);
- createCombinedWF(PulseTriSaw_8580, 0.8, 2.5, 0.64);
-    
- for(i = 0; i < 9; i++) {
-  ADSRstate[i] = HOLDZERO_BITMASK; envcnt[i] = 0; ratecnt[i] = 0; 
-  phaseaccu[i] = 0; prevaccu[i] = 0; expcnt[i] = 0; prevSR[i]=0;
-  noise_LFSR[i] = 0x7FFFFF; prevwfout[i] = 0;
- }
- for(i = 0; i < 3; i++) {
-  sourceMSBrise[i] = 0; sourceMSB[i] = 0;
-  prevlowpass[i] = 0; prevbandpass[i] = 0;
- }
- initSID();
-}
-
 //My SID implementation is similar to what I worked out in a SwinSID variant during 3..4 months of development. (So jsSID only took 2 weeks armed with this experience.)
 //I learned the workings of ADSR/WAVE/filter operations mainly from the quite well documented resid and resid-fp codes.
 //(The SID reverse-engineering sites were also good sources.)
@@ -191,54 +153,4 @@ int SID(char num, unsigned int baseaddr) //the SID emulation itself ('num' is th
  output = (nonfilt+filtout) * (sReg[0x18]&0xF) / OUTPUT_SCALEDOWN;
  if (output>=32767) output=32767; else if (output<=-32768) output=-32768; //saturation logic on overload (not needed if the callback handles it)
  return (int)output; // master output
-}
-
-
-//The anatomy of combined waveforms: The resid source simply uses 4kbyte 8bit samples from wavetable arrays, says these waveforms are mystic due to the analog behaviour.
-//It's true, the analog things inside SID play a significant role in how the combined waveforms look like, but process variations are not so huge that cause much differences in SIDs.
-//After checking these waveforms by eyes, it turned out for me that these waveform are fractal-like, recursively approachable waveforms.
-//My 1st thought and trial was to store only a portion of the waveforms in table, and magnify them depending on phase-accumulator's state.
-//But I wanted to understand how these waveforms are produced. I felt from the waveform-diagrams that the bits of the waveforms affect each other,
-//hence the recursive look. A short C code proved by assumption, I could generate something like a pulse+saw combined waveform.
-//Recursive calculations were not feasible for MCU of SwinSID, but for jsSID I could utilize what I found out and code below generates the combined waveforms into wavetables. 
-//To approach the combined waveforms as much as possible, I checked out the SID schematic that can be found at some reverse-engineering sites...
-//The SID's R-2R ladder WAVE DAC is driven by operation-amplifier like complementary FET output drivers, so that's not the place where I first thought the magic happens.
-//These 'opamps' (for all 12 wave-bits) have single FETs as inputs, and they switch on above a certain level of input-voltage, causing 0 or 1 bit as R-2R DAC input.
-//So the first keyword for the workings is TRESHOLD. These FET inputs are driven through serial switch FETs (wave-selector) that normally enables one waveform at a time.
-//The phase-accumulator's output is brought to 3 kinds of circuitries for the 3 basic waveforms. The pulse simply drives
-//all wave-selector inputs with a 0/1 depending on pulsewidth, the sawtooth has a XOR for triangle/ringmod generation, but what
-//is common for all waveforms, they have an open-drain driver before the wave-selector, which has FETs towards GND and 'FET resistor' towards the power-supply rail.
-//These outputs are clearly not designed to drive high loads, and normally they only have to drive the FETs input mentioned above.
-//But when more of these output drivers are switched together by the switch-FETs in the wave-selector, they affect each other by loading each other.
-//The pulse waveform, when selected, connects all of them together through a fairly strong connection, and its signal also affects the analog level (pulls below the treshold)...
-//The farther a specific DAC bit driver is from the other, the less it affects its output. It turned out it's not powers of 2 but something else,
-//that creates similar combined waveforms to that of real SID's... Note that combined waveforms never have values bigger than their sourcing sawtooth wave.
-//The analog levels that get generated by the various bit drivers, that pull each other up/DOWN, depend on the resistances the components/wires inside the SID.
-//And finally, what is output on the DAC depends on whether these analog levels are below or above the FET gate's treshold-level,
-//That's how the combined waveform is generated. Maybe I couldn't explain well enough, but the code below is simple enough to understand the mechanism algoritmically.
-//This simplified schematic exapmle might make it easier to understand sawtooth+pulse combination (must be observed with monospace fonts):
-//                               _____            |-    .--------------.   /\/\--.
-// Vsupply                /  .----| |---------*---|-    /    Vsupply   !    R    !      As can be seen on this schematic,
-//  ------.       other   !  !   _____        !  TRES   \       \      !         /      the pulse wave-selector FETs 
-//        !       saw bit *--!----| |---------'  HOLD   /       !     |-     2R  \      connect the neighbouring sawtooth
-//        /       output  !  !                          !      |------|-         /      outputs with a fairly strong 
-//     Rd \              |-  !WAVEFORM-SELECTOR         *--*---|-      !    R    !      connection to each other through
-//        /              |-  !SWITCHING FETs            !  !    !      *---/\/\--*      their own wave-selector FETs.
-//        ! saw-bit          !    _____                |-  !   ---     !         !      So the adjacent sawtooth outputs
-//        *------------------!-----| |-----------*-----|-  !          |-         /      pull each other lower (or maybe a bit upper but not exceeding sawtooth line)
-//        ! (weak drive,so   !  saw switch       ! TRES-!  `----------|-     2R  \      depending on their low/high state and
-//       |- can be shifted   !                   ! HOLD !              !         /      distance from each other, causing
-//  -----|- down (& up?)     !    _____          !      !              !     R   !      the resulting analog level that
-//        ! by neighbours)   *-----| |-----------'     ---            ---   /\/\-*      will either turn the output on or not.
-//   GND ---                 !  pulse switch                                     !      (Depending on their relation to treshold.)
-//
-//(As triangle waveform connects adjacent bits by default, the above explained effect becomes even stronger, that's why combined waveforms with thriangle are at 0 level most of the time.)
-
-//in case you don't like these calculated combined waveforms it's easy to substitute the generated tables by pre-sampled 'exact' versions
-
-unsigned int combinedWF(char num, char channel, unsigned int* wfarray, int index, char differ6581, byte freqh) {
- static float addf; addf = 0.6+0.4/freqh;
- if(differ6581 && SID_model[num]==6581) index&=0x7FF; 
- prevwavdata[channel] = wfarray[index]*addf + prevwavdata[channel]*(1.0-addf);
- return prevwavdata[channel];
 }
