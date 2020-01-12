@@ -18,6 +18,6 @@ extern const char *libcsid_getinfo();
 extern const char *libcsid_gettitle();
 extern const int   libcsid_getsubtunenum();
 
-extern void libcsid_render(unsigned short *output, int numsamples);
+extern void libcsid_render(signed short *output, int numsamples);
 
 #endif

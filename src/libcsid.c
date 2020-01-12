@@ -23,6 +23,9 @@ int OUTPUT_SCALEDOWN = SID_CHANNEL_AMOUNT * 16 + 26; //compensation for main vol
 //SID-emulation variables:
 byte ADSRstate[9], expcnt[9], sourceMSBrise[9];
 const byte FILTSW[9] = {1,2,4,1,2,4,1,2,4};
+unsigned long int prevwfout[9], sourceMSB[3], noise_LFSR[9];
+long int prevlowpass[3], prevbandpass[3];
+short int envcnt[9];
 //player-related variables:
 int SIDamount=1, SID_model[3]={8580,8580,8580}, requested_SID_model=-1, sampleratio;
 unsigned int initaddr, playaddr, playaddf, SID_address[3]={0xD400,0,0};
@@ -39,7 +42,34 @@ byte X=0, Y=0, IR=0, ST=0x00;  //STATUS-flags: N V - B D I Z C
 char cycles=0, finished=0, dynCIA=0;
 
 #ifdef LIBCSID_FULL
+ //SID-emulation variables:
+ unsigned int clock_ratio=22; 
+ unsigned int ratecnt[9];
+ unsigned long int phaseaccu[9], prevaccu[9];
+ float cutoff_ratio_8580, cutoff_ratio_6581, cutoff_bias_6581;
+ //player-related variables:
+ int framecnt=0, frame_sampleperiod = DEFAULT_SAMPLERATE/PAL_FRAMERATE; 
+ //CPU (and CIA/VIC-IRQ) emulation constants and variables - avoiding internal/automatic variables to retain speed
+ char CPUtime=0;
 #else
+ #define CLOCK_RATIO_DEFAULT C64_PAL_CPUCLK/DEFAULT_SAMPLERATE  //(50.0567520: lowest framerate where Sanxion is fine, and highest where Myth is almost fine)
+ #define VCR_SHUNT_6581 1500 //1500 //kOhm //cca 1.5 MOhm Rshunt across VCR FET drain and source (causing 220Hz bottom cutoff with 470pF integrator capacitors in old C64)
+ #define VCR_FET_TRESHOLD 350 //192 //Vth (on cutoff numeric range 0..2048) for the VCR cutoff-frequency control FET below which it doesn't conduct
+ #define CAP_6581 0.470 //0.470 //nF //filter capacitor value for 6581
+ #define FILTER_DARKNESS_6581 33.0 //22.0 //the bigger the value, the darker the filter control is (that is, cutoff frequency increases less with the same cutoff-value)
+ #define FILTER_DISTORTION_6581 0.0032 //0.0016 //the bigger the value the more of resistance-modulation (filter distortion) is applied for 6581 cutoff-control
+ 
+ float clock_ratio=CLOCK_RATIO_DEFAULT;
+ //SID-emulation variables:
+ byte prevSR[9];
+ unsigned long int prevwavdata[9];
+ long int phaseaccu[9], prevaccu[9];
+ float ratecnt[9];
+ float cutoff_ratio_8580, cutoff_steepness_6581, cap_6581_reciprocal;
+ //player-related variables:
+ float framecnt=0, frame_sampleperiod = DEFAULT_SAMPLERATE/PAL_FRAMERATE; 
+ //CPU (and CIA/VIC-IRQ) emulation constants and variables - avoiding internal/automatic variables to retain speed
+ float CPUtime=0.0;
 #endif
 
 enum {
@@ -53,10 +83,113 @@ enum {
 void cSID_init(int samplerate);
 int SID(char num, unsigned int baseaddr); void initSID();
 void initCPU (unsigned int mempos);  byte CPU (); 
-void init (byte subtune);  void play(void* userdata, byte *stream, int len );
+void init (byte subtune);
+void play(signed short *stream, int len );
 unsigned int combinedWF(char num, char channel, unsigned int* wfarray, int index, char differ6581, byte freqh);
 void createCombinedWF(unsigned int* wfarray, float bitmul, float bitstrength, float treshold);
 
+
+//----------------------------- MAIN thread ----------------------------
+
+void init (byte subt) {
+    static long int timeout;
+    subtune = subt;
+    initCPU(initaddr);
+    initSID();
+    A=subtune;
+    memory[1]=0x37;
+    memory[0xDC05]=0;
+    for(timeout=100000;timeout>=0;timeout--) if (CPU()) break; 
+    
+    if (timermode[subtune] || memory[0xDC05]) { //&& playaddf {   //CIA timing
+        if (!memory[0xDC05]) {memory[0xDC04]=0x24; memory[0xDC05]=0x40;} //C64 startup-default
+        frame_sampleperiod = (memory[0xDC04]+memory[0xDC05]*256)/clock_ratio;
+    } else {
+        frame_sampleperiod = samplerate/PAL_FRAMERATE;  //Vsync timing
+    }
+    //frame_sampleperiod = (memory[0xDC05]!=0 || (!timermode[subtune] && playaddf))? samplerate/PAL_FRAMERATE : (memory[0xDC04] + memory[0xDC05]*256) / clock_ratio; 
+    if(playaddf==0) {
+        playaddr = ((memory[1]&3)<2)? memory[0xFFFE]+memory[0xFFFF]*256 : memory[0x314]+memory[0x315]*256;
+        printf("IRQ-playaddress:%4.4X\n",playaddr);
+    } else { //player under KERNAL (Crystal Kingdom Dizzy)
+        playaddr=playaddf;
+        if (playaddr>=0xE000 && memory[1]==0x37) memory[1]=0x35;
+    }
+    initCPU(playaddr);
+    framecnt=1;
+    finished=0;
+    CPUtime=0; 
+}
+
+void play(signed short *stream, int len ) { 
+    int i,j,k, output;
+    
+    for(i=0; i<len; i++) {
+        output = 0;
+        framecnt--;
+        if (framecnt<=0) {
+            framecnt=frame_sampleperiod;
+            finished=0;
+            PC=playaddr;
+            SP=0xFF;
+        }
+        // printf("%d  %f\n",framecnt,playtime); }
+        
+        #ifdef LIBCSID_FULL
+         for (j=0; j<sampleratio; j++) {
+             if (finished==0 && --cycles<=0) {
+                 pPC=PC;
+                 //RTS,RTI and IRQ player ROM return handling
+                 if (CPU()>=0xFE || ( (memory[1]&3)>1 && pPC<0xE000 && (PC==0xEA31 || PC==0xEA81) ) ) {
+                     finished=1;
+                 }
+                 if ( (addr==0xDC05 || addr==0xDC04) && (memory[1]&3) && timermode[subtune] ) {
+                     frame_sampleperiod = (memory[0xDC04] + memory[0xDC05]*256) / clock_ratio;  //dynamic CIA-setting (Galway/Rubicon workaround)
+                     dynCIA=1;
+                 }
+                 if(storadd>=0xD420 && storadd<0xD800 && (memory[1]&3)) {  //CJ in the USA workaround (writing above $d420, except SID2/SID3)
+                     if ( !(SID_address[1]<=storadd && storadd<SID_address[1]+0x1F) && !(SID_address[2]<=storadd && storadd<SID_address[2]+0x1F) ) {
+                         memory[storadd&0xD41F]=memory[storadd]; //write to $D400..D41F if not in SID2/SID3 address-space
+                     }
+                 }
+             }
+             for (k=0; k<SIDamount; k++) output += SID(k, SID_address[k]);
+         } 
+         output /= sampleratio;
+        #else
+         if (finished==0) { 
+             while (CPUtime<=clock_ratio) {
+                 pPC=PC;
+                 //RTS,RTI and IRQ player ROM return handling
+                 if (CPU()>=0xFE || ( (memory[1]&3)>1 && pPC<0xE000 && (PC==0xEA31 || PC==0xEA81) ) ) {
+                     finished=1;
+                     break;
+                 } else {
+                     CPUtime+=cycles;
+                 }
+                 if ( (addr==0xDC05 || addr==0xDC04) && (memory[1]&3) && timermode[subtune] ) {
+                     frame_sampleperiod = (memory[0xDC04] + memory[0xDC05]*256) / clock_ratio;  //dynamic CIA-setting (Galway/Rubicon workaround)
+                     dynCIA=1;
+                 }
+                 if(storadd>=0xD420 && storadd<0xD800 && (memory[1]&3)) {  //CJ in the USA workaround (writing above $d420, except SID2/SID3)
+                     if ( !(SID_address[1]<=storadd && storadd<SID_address[1]+0x1F) && !(SID_address[2]<=storadd && storadd<SID_address[2]+0x1F) ) {
+                         memory[storadd&0xD41F]=memory[storadd]; //write to $D400..D41F if not in SID2/SID3 address-space
+                     }
+                 }
+                 if(addr==0xD404 && !(memory[0xD404]&GATE_BITMASK)) ADSRstate[0]&=0x3E; //Whittaker player workarounds (if GATE-bit triggered too fast, 0 for some cycles then 1)
+                 if(addr==0xD40B && !(memory[0xD40B]&GATE_BITMASK)) ADSRstate[1]&=0x3E;
+                 if(addr==0xD412 && !(memory[0xD412]&GATE_BITMASK)) ADSRstate[2]&=0x3E;
+             }
+             CPUtime-=clock_ratio;
+         }
+         for (k=0; k<SIDamount; k++) output += SID(k, SID_address[k]);
+        #endif
+        stream[i]=output; 
+    }
+    
+     //mix = SID(0,0xD400); if (SID_address[1]) mix += SID(1,SID_address[1]); if(SID_address[2]) mix += SID(2,SID_address[2]);
+     //return mix * volume * SIDamount_vol[SIDamount] + (Math.random()*background_noise-background_noise/2); 
+}
 
 //--------------------------------- CPU emulation -------------------------------------------
 
@@ -580,7 +713,46 @@ byte CPU () { //the CPU emulation for SID/PRG playback (ToDo: CIA/VIC-IRQ/NMI/RE
     return 0; 
 }
 
+//----------------------------- SID emulation -----------------------------------------
 
+unsigned int TriSaw_8580[4096], PulseSaw_8580[4096], PulseTriSaw_8580[4096];
+
+const byte ADSR_exptable[256] = {1, 30, 30, 30, 30, 30, 30, 16, 16, 16, 16, 16, 16, 16, 16, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 4, 4, 4, 4, 4, //pos0:1  pos6:30  pos14:16  pos26:8
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, //pos54:4 //pos93:2
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+};
+
+//registers: 0:freql1  1:freqh1  2:pwml1  3:pwmh1  4:ctrl1  5:ad1   6:sr1  7:freql2  8:freqh2  9:pwml2 10:pwmh2 11:ctrl2 12:ad2  13:sr 14:freql3 15:freqh3 16:pwml3 17:pwmh3 18:ctrl3 19:ad3  20:sr3 
+//           21:cutoffl 22:cutoffh 23:flsw_reso 24:vol_ftype 25:potX 26:potY 27:OSC3 28:ENV3
+void initSID() { 
+    int i;
+    for(i=0xD400;i<=0xD7FF;i++) memory[i]=0;
+    for(i=0xDE00;i<=0xDFFF;i++) memory[i]=0;
+    for(i=0;i<9;i++) {
+        ADSRstate[i]=HOLDZERO_BITMASK;
+        ratecnt[i]=envcnt[i]=expcnt[i]=0;
+    } 
+}
+
+void createCombinedWF(unsigned int* wfarray, float bitmul, float bitstrength, float treshold) {
+    int i,j,k;
+    for (i=0; i<4096; i++) {
+        wfarray[i]=0;
+        for (j=0; j<12;j++) {
+            #ifdef LIBCSID_FULL
+             float bitlevel=((i>>j)&1);
+             for (k=0; k<12; k++) if (!((i>>k)&1)) bitlevel -= bitmul / pow(bitstrength, fabs(k-j));
+            #else
+             float bitlevel=0; 
+             for (k=0; k<12; k++) bitlevel += ( bitmul/pow(bitstrength,fabs(k-j)) ) * (((i>>k)&1)-0.5);
+            #endif
+            wfarray[i] += (bitlevel>=treshold)? pow(2,j) : 0;
+        }
+        wfarray[i]*=12;
+    }
+}
 
 
 
@@ -709,6 +881,6 @@ int libcsid_load(unsigned char *_buffer, int _bufferlen, int _subtune) {
     return 0;
 }
 
-void libcsid_render(unsigned short *_output, int _numsamples) {
-  play(NULL, (byte *)_output, _numsamples * 2);
+void libcsid_render(signed short *_output, int _numsamples) {
+    play(_output, _numsamples);
 }
