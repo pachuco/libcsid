@@ -10,6 +10,8 @@ int SID(char num, unsigned int baseaddr)
     static unsigned long int MSB;
     static int nonfilt, filtin, cutoff[3], resonance[3]; //cutoff must be signed otherwise compiler may make errors in multiplications
     static long int output, filtout, ftmp;              //so if samplerate is smaller, cutoff needs to be 'long int' as its value can exceed 32768
+    
+    static float rDS_VCR_FET;
 
     filtin=nonfilt=0;
     sReg = &memory[baseaddr];
@@ -122,27 +124,35 @@ int SID(char num, unsigned int baseaddr)
     //FILTER:
     filterctrl_prescaler[num]--;
     //calculate cutoff and resonance curves only at samplerate is still adequate and reduces CPU stress of frequent float calculations
+    #define SCALE_CUTOFF 0x10000
+    #define SCALE_RESO   0x100
     if (filterctrl_prescaler[num]==0) {
         filterctrl_prescaler[num]=clock_ratio;
         cutoff[num] = 2 + sReg[0x16] * 8 + (sReg[0x15] & 7);
         if (SID_model[num] == 8580) {
-            cutoff[num] = ( 1 - exp(cutoff[num] * cutoff_ratio_8580) ) * 0x10000;
-            resonance[num] = ( pow(2, ((4 - (sReg[0x17] >> 4)) / 8.0)) ) * 0x100; //resonance could be taken from table as well
-        } else {
-            cutoff[num] = (  cutoff_bias_6581 + ( (cutoff[num] < 192) ? 0 : 1 - exp((cutoff[num]-192) * cutoff_ratio_6581) )  ) * 0x10000;
-            resonance[num] = ( (sReg[0x17] > 0x5F) ? 8.0 / (sReg[0x17] >> 4) : 1.41 ) * 0x100;
-        }  
+            cutoff[num] = ( 1 - exp((cutoff[num]+2) * cutoff_ratio_8580) ) * SCALE_CUTOFF; //linear curve by resistor-ladder VCR
+            resonance[num] = ( pow(2, ((4 - (sReg[0x17] >> 4)) / 8.0)) ) * SCALE_RESO;
+        } else { //6581
+            cutoff[num] += round(filtin*FILTER_DISTORTION_6581); //MOSFET-VCR control-voltage-modulation (resistance-modulation aka 6581 filter distortion) emulation
+            //below Vth treshold Vgs control-voltage FET presents an open circuit
+            // rDS ~ (-Vth*rDSon) / (Vgs-Vth)  //above Vth FET drain-source resistance is proportional to reciprocal of cutoff-control voltage
+            rDS_VCR_FET = cutoff[num]<=VCR_FET_TRESHOLD ? 100000000.0 : cutoff_steepness_6581/(cutoff[num]-VCR_FET_TRESHOLD);
+            cutoff[num] = ( 1 - exp( cap_6581_reciprocal / (VCR_SHUNT_6581*rDS_VCR_FET/(VCR_SHUNT_6581+rDS_VCR_FET)) / C64_PAL_CPUCLK ) ) * SCALE_CUTOFF; //curve with 1.5MOhm VCR parallel Rshunt emulation
+            resonance[num] = ( (sReg[0x17] > 0x5F) ? 8.0 / (sReg[0x17] >> 4) : 1.41 ) * SCALE_RESO;
+        }
     }
     filtout=0; //the filter-calculation itself can't be prescaled because sound-quality would suffer of no 'oversampling'
-    ftmp = filtin + prevbandpass[num] * resonance[num] / 0x100 + prevlowpass[num];
+    ftmp = filtin + prevbandpass[num] * resonance[num] / SCALE_RESO + prevlowpass[num];
     if (sReg[0x18] & HIGHPASS_BITMASK) filtout -= ftmp;
-    ftmp = prevbandpass[num] - ftmp * cutoff[num] / 0x10000;
+    ftmp = prevbandpass[num] - ftmp * cutoff[num] / SCALE_CUTOFF;
     prevbandpass[num] = ftmp;
     if (sReg[0x18] & BANDPASS_BITMASK) filtout -= ftmp;
-    ftmp = prevlowpass[num] + ftmp * cutoff[num] / 0x10000;
+    ftmp = prevlowpass[num] + ftmp * cutoff[num] / SCALE_CUTOFF;
     prevlowpass[num] = ftmp;
-    if (sReg[0x18] & LOWPASS_BITMASK) filtout += ftmp;    
-
+    if (sReg[0x18] & LOWPASS_BITMASK) filtout += ftmp;
+    #undef SCALE_CUTOFF
+    #undef SCALE_RESO
+    
     //output stage for one SID
     output = (nonfilt+filtout) * (sReg[0x18]&0xF) / OUTPUT_SCALEDOWN;
     //saturation logic on overload (not needed if the callback handles it)

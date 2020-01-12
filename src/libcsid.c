@@ -41,30 +41,30 @@ short int A=0, T=0, SP=0xFF;
 byte X=0, Y=0, IR=0, ST=0x00;  //STATUS-flags: N V - B D I Z C
 char cycles=0, finished=0, dynCIA=0;
 
+ #define VCR_SHUNT_6581 1500 //1500 //kOhm //cca 1.5 MOhm Rshunt across VCR FET drain and source (causing 220Hz bottom cutoff with 470pF integrator capacitors in old C64)
+ #define VCR_FET_TRESHOLD 350 //192 //Vth (on cutoff numeric range 0..2048) for the VCR cutoff-frequency control FET below which it doesn't conduct
+ #define CAP_6581 0.470 //0.470 //nF //filter capacitor value for 6581
+ #define FILTER_DARKNESS_6581 33.0 //22.0 //the bigger the value, the darker the filter control is (that is, cutoff frequency increases less with the same cutoff-value)
+ #define FILTER_DISTORTION_6581 0.0032 //0.0016 //the bigger the value the more of resistance-modulation (filter distortion) is applied for 6581 cutoff-control
+ float cutoff_ratio_8580, cutoff_steepness_6581, cap_6581_reciprocal;
 #ifdef LIBCSID_FULL
  //SID-emulation variables:
  float clock_ratio=22; 
  unsigned int ratecnt[9];
  unsigned long int phaseaccu[9], prevaccu[9];
- float cutoff_ratio_8580, cutoff_ratio_6581, cutoff_bias_6581;
+ //float cutoff_ratio_6581, cutoff_bias_6581;
  //player-related variables:
  int framecnt=0, frame_sampleperiod = DEFAULT_SAMPLERATE/PAL_FRAMERATE; 
  //CPU (and CIA/VIC-IRQ) emulation constants and variables - avoiding internal/automatic variables to retain speed
  char CPUtime=0;
 #else
  #define CLOCK_RATIO_DEFAULT C64_PAL_CPUCLK/DEFAULT_SAMPLERATE  //(50.0567520: lowest framerate where Sanxion is fine, and highest where Myth is almost fine)
- #define VCR_SHUNT_6581 1500 //1500 //kOhm //cca 1.5 MOhm Rshunt across VCR FET drain and source (causing 220Hz bottom cutoff with 470pF integrator capacitors in old C64)
- #define VCR_FET_TRESHOLD 350 //192 //Vth (on cutoff numeric range 0..2048) for the VCR cutoff-frequency control FET below which it doesn't conduct
- #define CAP_6581 0.470 //0.470 //nF //filter capacitor value for 6581
- #define FILTER_DARKNESS_6581 33.0 //22.0 //the bigger the value, the darker the filter control is (that is, cutoff frequency increases less with the same cutoff-value)
- #define FILTER_DISTORTION_6581 0.0032 //0.0016 //the bigger the value the more of resistance-modulation (filter distortion) is applied for 6581 cutoff-control
  
  float clock_ratio=CLOCK_RATIO_DEFAULT;
  //SID-emulation variables:
  unsigned long int prevwavdata[9];
  long int phaseaccu[9], prevaccu[9];
  float ratecnt[9];
- float cutoff_ratio_8580, cutoff_steepness_6581, cap_6581_reciprocal;
  //player-related variables:
  float framecnt=0, frame_sampleperiod = DEFAULT_SAMPLERATE/PAL_FRAMERATE; 
  //CPU (and CIA/VIC-IRQ) emulation constants and variables - avoiding internal/automatic variables to retain speed
@@ -749,11 +749,14 @@ void initSID() {
 
 void cSID_init(int samplerate) {
     int i;
+    
+    cap_6581_reciprocal = -1000000/CAP_6581;
+    cutoff_steepness_6581 = FILTER_DARKNESS_6581*(2048.0-VCR_FET_TRESHOLD);
     #ifdef LIBCSID_FULL
      clock_ratio = round(C64_PAL_CPUCLK/samplerate);
      cutoff_ratio_8580 = -2 * 3.14 * (12500.0 / 2048) / C64_PAL_CPUCLK;
-     cutoff_ratio_6581 = -2 * 3.14 * (20000.0 / 2048) / C64_PAL_CPUCLK;
-     cutoff_bias_6581 = 1 - exp( -2 * 3.14 * 220 / C64_PAL_CPUCLK ); //around 220Hz below treshold
+     //cutoff_ratio_6581 = -2 * 3.14 * (20000.0 / 2048) / C64_PAL_CPUCLK;
+     //cutoff_bias_6581 = 1 - exp( -2 * 3.14 * 220 / C64_PAL_CPUCLK ); //around 220Hz below treshold
      
      createCombinedWF(TriSaw_8580, 0.5, 2.2, 0.9);
      createCombinedWF(PulseSaw_8580, 0.23, 1.27, 0.55);
@@ -768,8 +771,6 @@ void cSID_init(int samplerate) {
          ADSRstep[0]=1;
      }
      cutoff_ratio_8580 = -2 * 3.14 * (12500 / 2048) / samplerate;
-     cap_6581_reciprocal = -1000000/CAP_6581;
-     cutoff_steepness_6581 = FILTER_DARKNESS_6581*(2048.0-VCR_FET_TRESHOLD);
      
      createCombinedWF(TriSaw_8580, 0.8, 2.4, 0.64);
      createCombinedWF(PulseSaw_8580, 1.4, 1.9, 0.68);
