@@ -114,7 +114,7 @@ int SID(char num, unsigned int baseaddr)
         }
     }
     //update readable SID1-registers (some SID tunes might use 3rd channel ENV3/OSC3 value as control)
-    if(num==0, memory[1]&3) { //OSC3, ENV3 (some players rely on it) 
+    if(num==0 && memory[1]&3) { //OSC3, ENV3 (some players rely on it) 
         sReg[0x1B]=wfout>>8;
         sReg[0x1C]=envcnt[3];
     }
