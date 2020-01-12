@@ -11,39 +11,39 @@ int SID(char num, unsigned int baseaddr)
     static int nonfilt, filtin, cutoff[3], resonance[3]; //cutoff must be signed otherwise compiler may make errors in multiplications
     static long int output, filtout, ftmp;              //so if samplerate is smaller, cutoff needs to be 'long int' as its value can exceed 32768
 
-    filtin=nonfilt=0; sReg = &memory[baseaddr]; vReg = sReg;
+    filtin=nonfilt=0;
+    sReg = &memory[baseaddr];
+    vReg = sReg;
     for (channel = num * SID_CHANNEL_AMOUNT ; channel < (num + 1) * SID_CHANNEL_AMOUNT ; channel++, vReg += 7) {
         ctrl = vReg[4];
 
         //ADSR envelope generator:
-        {
-            SR = vReg[6];
-            prevgate = (ADSRstate[channel] & GATE_BITMASK);
-            if (prevgate != (ctrl & GATE_BITMASK)) { //gatebit-change?
-                if (prevgate) {
-                    ADSRstate[channel] &= 0xFF - (GATE_BITMASK | ATTACK_BITMASK | DECAYSUSTAIN_BITMASK);
-                } //falling edge
-                else {
-                    ADSRstate[channel] = (GATE_BITMASK | ATTACK_BITMASK | DECAYSUSTAIN_BITMASK); //rising edge, also sets hold_zero_bit=0
-                }
+        SR = vReg[6];
+        prevgate = (ADSRstate[channel] & GATE_BITMASK);
+        if (prevgate != (ctrl & GATE_BITMASK)) { //gatebit-change?
+            if (prevgate) {
+                ADSRstate[channel] &= 0xFF - (GATE_BITMASK | ATTACK_BITMASK | DECAYSUSTAIN_BITMASK);
+            } //falling edge
+            else {
+                ADSRstate[channel] = (GATE_BITMASK | ATTACK_BITMASK | DECAYSUSTAIN_BITMASK); //rising edge, also sets hold_zero_bit=0
             }
-            if (ADSRstate[channel] & ATTACK_BITMASK) period = ADSRperiods[ vReg[5] >> 4 ];
-            else if (ADSRstate[channel] & DECAYSUSTAIN_BITMASK) period = ADSRperiods[ vReg[5] & 0xF ];
-            else period = ADSRperiods[ SR & 0xF ];
-            ratecnt[channel]++; ratecnt[channel]&=0x7FFF;   //can wrap around (ADSR delay-bug: short 1st frame)
-            if (ratecnt[channel] == period) { //ratecounter shot (matches rateperiod) (in genuine SID ratecounter is LFSR)
-                ratecnt[channel] = 0; //reset rate-counter on period-match
-                if ((ADSRstate[channel] & ATTACK_BITMASK) || ++expcnt[channel] == ADSR_exptable[envcnt[channel]]) {
-                    expcnt[channel] = 0; 
-                    if (!(ADSRstate[channel] & HOLDZERO_BITMASK)) {
-                        if (ADSRstate[channel] & ATTACK_BITMASK) {
-                            envcnt[channel]++;
-                            if (envcnt[channel]==0xFF) ADSRstate[channel] &= 0xFF - ATTACK_BITMASK;
-                        } 
-                        else if ( !(ADSRstate[channel] & DECAYSUSTAIN_BITMASK) || envcnt[channel] != (SR>>4)+(SR&0xF0) ) {
-                            envcnt[channel]--; //resid adds 1 cycle delay, we omit that pipelining mechanism here
-                            if (envcnt[channel]==0) ADSRstate[channel] |= HOLDZERO_BITMASK;
-                        }
+        }
+        if (ADSRstate[channel] & ATTACK_BITMASK) period = ADSRperiods[ vReg[5] >> 4 ];
+        else if (ADSRstate[channel] & DECAYSUSTAIN_BITMASK) period = ADSRperiods[ vReg[5] & 0xF ];
+        else period = ADSRperiods[ SR & 0xF ];
+        ratecnt[channel]++; ratecnt[channel]&=0x7FFF;   //can wrap around (ADSR delay-bug: short 1st frame)
+        if (ratecnt[channel] == period) { //ratecounter shot (matches rateperiod) (in genuine SID ratecounter is LFSR)
+            ratecnt[channel] = 0; //reset rate-counter on period-match
+            if ((ADSRstate[channel] & ATTACK_BITMASK) || ++expcnt[channel] == ADSR_exptable[envcnt[channel]]) {
+                expcnt[channel] = 0; 
+                if (!(ADSRstate[channel] & HOLDZERO_BITMASK)) {
+                    if (ADSRstate[channel] & ATTACK_BITMASK) {
+                        envcnt[channel]++;
+                        if (envcnt[channel]==0xFF) ADSRstate[channel] &= 0xFF - ATTACK_BITMASK;
+                    } 
+                    else if ( !(ADSRstate[channel] & DECAYSUSTAIN_BITMASK) || envcnt[channel] != (SR>>4)+(SR&0xF0) ) {
+                        envcnt[channel]--; //resid adds 1 cycle delay, we omit that pipelining mechanism here
+                        if (envcnt[channel]==0) ADSRstate[channel] |= HOLDZERO_BITMASK;
                     }
                 }
             }
@@ -60,7 +60,7 @@ int SID(char num, unsigned int baseaddr)
         }
         MSB = phaseaccu[channel] & 0x800000;
         sourceMSBrise[num] = (MSB > (prevaccu[channel] & 0x800000)) ? 1 : 0;
-        if (wf & NOISE_BITMASK) {
+        if (wf & NOISE_BITMASK) { //noise waveform
             int tmp = noise_LFSR[channel];
             if (((phaseaccu[channel] & 0x100000) != (prevaccu[channel] & 0x100000))) { 
                 int step = (tmp & 0x400000) ^ ((tmp & 0x20000) << 5);
@@ -72,7 +72,7 @@ int SID(char num, unsigned int baseaddr)
             pw = (vReg[2] + (vReg[3] & 0xF) * 256) * 16;
             
             int tmp = phaseaccu[channel] >> 8;
-            if (wf == PULSE_BITMASK) {
+            if (wf == PULSE_BITMASK) { //simple pulse
                 if (test || tmp>=pw) wfout = 0xFFFF;
                 else {
                     wfout=0;
@@ -100,32 +100,38 @@ int SID(char num, unsigned int baseaddr)
             int tmp = phaseaccu[channel] ^ (ctrl & RING_BITMASK ? sourceMSB[num] : 0);
             wfout = (tmp ^ (tmp & 0x800000 ? 0xFFFFFF : 0)) >> 7;
         }
-        if (wf) prevwfout[channel] = wfout;
-        else {
+        if (wf) {
+            prevwfout[channel] = wfout;
+        } else {
             wfout = prevwfout[channel];
         } //emulate waveform 00 floating wave-DAC
         prevaccu[channel] = phaseaccu[channel];
         sourceMSB[num] = MSB;
-        if (sReg[0x17] & FILTSW[channel]) filtin += ((long int)wfout - 0x8000) * envcnt[channel] / 256;
-        else if ((FILTSW[channel] != 4) || !(sReg[0x18] & OFF3_BITMASK)) 
-                nonfilt += ((long int)wfout - 0x8000) * envcnt[channel] / 256;
+        if (sReg[0x17] & FILTSW[channel]) {
+            filtin += ((long int)wfout - 0x8000) * envcnt[channel] / 256;
+        } else if ((FILTSW[channel] != 4) || !(sReg[0x18] & OFF3_BITMASK)) {
+            nonfilt += ((long int)wfout - 0x8000) * envcnt[channel] / 256;
+        }
     }
     //update readable SID1-registers (some SID tunes might use 3rd channel ENV3/OSC3 value as control)
-    if(num==0, memory[1]&3) { sReg[0x1B]=wfout>>8; sReg[0x1C]=envcnt[3]; } //OSC3, ENV3 (some players rely on it) 
+    if(num==0, memory[1]&3) { //OSC3, ENV3 (some players rely on it) 
+        sReg[0x1B]=wfout>>8;
+        sReg[0x1C]=envcnt[3];
+    }
     
     //FILTER:
     filterctrl_prescaler[num]--;
-    if (filterctrl_prescaler[num]==0)
-    {  //calculate cutoff and resonance curves only at samplerate is still adequate and reduces CPU stress of frequent float calculations
-     filterctrl_prescaler[num]=clock_ratio;
-     cutoff[num] = 2 + sReg[0x16] * 8 + (sReg[0x15] & 7);
-     if (SID_model[num] == 8580) {
-         cutoff[num] = ( 1 - exp(cutoff[num] * cutoff_ratio_8580) ) * 0x10000;
-         resonance[num] = ( pow(2, ((4 - (sReg[0x17] >> 4)) / 8.0)) ) * 0x100; //resonance could be taken from table as well
-     } else {
-         cutoff[num] = (  cutoff_bias_6581 + ( (cutoff[num] < 192) ? 0 : 1 - exp((cutoff[num]-192) * cutoff_ratio_6581) )  ) * 0x10000;
-         resonance[num] = ( (sReg[0x17] > 0x5F) ? 8.0 / (sReg[0x17] >> 4) : 1.41 ) * 0x100;
-     }  
+    //calculate cutoff and resonance curves only at samplerate is still adequate and reduces CPU stress of frequent float calculations
+    if (filterctrl_prescaler[num]==0) {
+        filterctrl_prescaler[num]=clock_ratio;
+        cutoff[num] = 2 + sReg[0x16] * 8 + (sReg[0x15] & 7);
+        if (SID_model[num] == 8580) {
+            cutoff[num] = ( 1 - exp(cutoff[num] * cutoff_ratio_8580) ) * 0x10000;
+            resonance[num] = ( pow(2, ((4 - (sReg[0x17] >> 4)) / 8.0)) ) * 0x100; //resonance could be taken from table as well
+        } else {
+            cutoff[num] = (  cutoff_bias_6581 + ( (cutoff[num] < 192) ? 0 : 1 - exp((cutoff[num]-192) * cutoff_ratio_6581) )  ) * 0x10000;
+            resonance[num] = ( (sReg[0x17] > 0x5F) ? 8.0 / (sReg[0x17] >> 4) : 1.41 ) * 0x100;
+        }  
     }
     filtout=0; //the filter-calculation itself can't be prescaled because sound-quality would suffer of no 'oversampling'
     ftmp = filtin + prevbandpass[num] * resonance[num] / 0x100 + prevlowpass[num];
@@ -139,6 +145,11 @@ int SID(char num, unsigned int baseaddr)
 
     //output stage for one SID
     output = (nonfilt+filtout) * (sReg[0x18]&0xF) / OUTPUT_SCALEDOWN;
-    if (output>=32767) output=32767; else if (output<=-32768) output=-32768; //saturation logic on overload (not needed if the callback handles it)
+    //saturation logic on overload (not needed if the callback handles it)
+    if (output>=32767) {
+        output=32767;
+    } else if (output<=-32768) {
+        output=-32768;
+    }
     return (int)output; // master output
 }
