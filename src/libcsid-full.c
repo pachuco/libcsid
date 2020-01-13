@@ -6,12 +6,13 @@ int SID(char num, unsigned int baseaddr)
     //better keep these variables static so they won't slow down the routine like if they were internal automatic variables always recreated
     static byte channel, ctrl, SR, prevgate, wf, test, filterctrl_prescaler[3]; 
     static byte *sReg, *vReg;
-    static unsigned int period, accuadd, pw, wfout;
+    static unsigned int accuadd, pw, wfout;
     static unsigned long int MSB;
     static int nonfilt, filtin, cutoff[3], resonance[3]; //cutoff must be signed otherwise compiler may make errors in multiplications
     static long int output, filtout, ftmp;              //so if samplerate is smaller, cutoff needs to be 'long int' as its value can exceed 32768
-    
+    static unsigned int period;
     static float rDS_VCR_FET;
+    
 
     filtin=nonfilt=0;
     sReg = &memory[baseaddr];
@@ -25,15 +26,19 @@ int SID(char num, unsigned int baseaddr)
         if (prevgate != (ctrl & GATE_BITMASK)) { //gatebit-change?
             if (prevgate) {
                 ADSRstate[channel] &= 0xFF - (GATE_BITMASK | ATTACK_BITMASK | DECAYSUSTAIN_BITMASK);
-            } //falling edge
-            else {
+            } else { //falling edge
                 ADSRstate[channel] = (GATE_BITMASK | ATTACK_BITMASK | DECAYSUSTAIN_BITMASK); //rising edge, also sets hold_zero_bit=0
             }
         }
-        if (ADSRstate[channel] & ATTACK_BITMASK) period = ADSRperiods[ vReg[5] >> 4 ];
-        else if (ADSRstate[channel] & DECAYSUSTAIN_BITMASK) period = ADSRperiods[ vReg[5] & 0xF ];
-        else period = ADSRperiods[ SR & 0xF ];
-        ratecnt[channel]++; ratecnt[channel]&=0x7FFF;   //can wrap around (ADSR delay-bug: short 1st frame)
+        if (ADSRstate[channel] & ATTACK_BITMASK) {
+            period = ADSRperiods[ vReg[5] >> 4 ];
+        } else if (ADSRstate[channel] & DECAYSUSTAIN_BITMASK) {
+            period = ADSRperiods[ vReg[5] & 0xF ];
+        } else {
+            period = ADSRperiods[ SR & 0xF ];
+        }
+        ratecnt[channel]++;
+        ratecnt[channel]&=0x7FFF;   //can wrap around (ADSR delay-bug: short 1st frame)
         if (ratecnt[channel] == period) { //ratecounter shot (matches rateperiod) (in genuine SID ratecounter is LFSR)
             ratecnt[channel] = 0; //reset rate-counter on period-match
             if ((ADSRstate[channel] & ATTACK_BITMASK) || ++expcnt[channel] == ADSR_exptable[envcnt[channel]]) {
@@ -41,9 +46,11 @@ int SID(char num, unsigned int baseaddr)
                 if (!(ADSRstate[channel] & HOLDZERO_BITMASK)) {
                     if (ADSRstate[channel] & ATTACK_BITMASK) {
                         envcnt[channel]++;
-                        if (envcnt[channel]==0xFF) ADSRstate[channel] &= 0xFF - ATTACK_BITMASK;
-                    } 
-                    else if ( !(ADSRstate[channel] & DECAYSUSTAIN_BITMASK) || envcnt[channel] != (SR>>4)+(SR&0xF0) ) {
+                        if (envcnt[channel]>=0xFF) {
+                            envcnt[channel]=0xFF;
+                            ADSRstate[channel] &= 0xFF-ATTACK_BITMASK;
+                        }
+                    } else if ( !(ADSRstate[channel] & DECAYSUSTAIN_BITMASK) || envcnt[channel] != (SR>>4)+(SR&0xF0) ) {
                         envcnt[channel]--; //resid adds 1 cycle delay, we omit that pipelining mechanism here
                         if (envcnt[channel]==0) ADSRstate[channel] |= HOLDZERO_BITMASK;
                     }
@@ -58,7 +65,8 @@ int SID(char num, unsigned int baseaddr)
         if (test || ((ctrl & SYNC_BITMASK) && sourceMSBrise[num])) {
             phaseaccu[channel] = 0;
         } else {
-            phaseaccu[channel] += accuadd; phaseaccu[channel]&=0xFFFFFF;
+            phaseaccu[channel] += accuadd;
+            phaseaccu[channel]&=0xFFFFFF;
         }
         MSB = phaseaccu[channel] & 0x800000;
         sourceMSBrise[num] = (MSB > (prevaccu[channel] & 0x800000)) ? 1 : 0;
@@ -70,23 +78,22 @@ int SID(char num, unsigned int baseaddr)
                 noise_LFSR[channel] = tmp;
             }
             wfout = (wf & 0x70) ? 0 : ((tmp & 0x100000) >> 5) + ((tmp & 0x40000) >> 4) + ((tmp & 0x4000) >> 1) + ((tmp & 0x800) << 1) + ((tmp & 0x200) << 2) + ((tmp & 0x20) << 5) + ((tmp & 0x04) << 7) + ((tmp & 0x01) << 8);
-        } else if (wf & PULSE_BITMASK) {
+        } else if (wf & PULSE_BITMASK) { //simple pulse
             pw = (vReg[2] + (vReg[3] & 0xF) * 256) * 16;
             
             int tmp = phaseaccu[channel] >> 8;
             if (wf == PULSE_BITMASK) { //simple pulse
-                if (test || tmp>=pw) wfout = 0xFFFF;
-                else {
+                if (test || tmp>=pw) {
+                    wfout = 0xFFFF;
+                } else {
                     wfout=0;
                 }
-            }
-            else { //combined pulse
+            } else { //combined pulse
                 wfout = (tmp >= pw || test) ? 0xFFFF : 0; 
-                if (wf & TRI_BITMASK) {
+                if (wf & TRI_BITMASK) { //saw+triangle
                     if (wf & SAW_BITMASK) {
                         wfout = (wfout) ? combinedWF(num, channel, PulseTriSaw_8580, tmp >> 4, 1, 123) : 0;
-                    } //pulse+saw+triangle (waveform nearly identical to tri+saw)
-                    else {
+                    } else { //pulse+saw+triangle (waveform nearly identical to tri+saw
                         tmp = phaseaccu[channel] ^ (ctrl & RING_BITMASK ? sourceMSB[num] : 0);
                         wfout = (wfout) ? combinedWF(num, channel, PulseSaw_8580, (tmp ^ (tmp & 0x800000 ? 0xFFFFFF : 0)) >> 11, 0, 123) : 0;
                     }

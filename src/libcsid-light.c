@@ -44,8 +44,10 @@
 int SID(char num, unsigned int baseaddr) { //the SID emulation itself ('num' is the number of SID to iterate (0..2)
     
     //better keep these variables static so they won't slow down the routine like if they were internal automatic variables always recreated
-    static byte channel, ctrl, SR, prevgate, wf, test; byte *sReg, *vReg;
-    static unsigned int accuadd, MSB, pw, wfout;
+    static byte channel, ctrl, SR, prevgate, wf, test;
+    static byte *sReg, *vReg;
+    static unsigned int accuadd, pw, wfout;
+    static unsigned long int MSB;
     static int tmp, step, lim, nonfilt, filtin, filtout, output, cutoff[3], resonance[3];
     static float period, steep, rDS_VCR_FET, ftmp;
     
@@ -63,7 +65,7 @@ int SID(char num, unsigned int baseaddr) { //the SID emulation itself ('num' is 
         if (prevgate != (ctrl & GATE_BITMASK)) { //gatebit-change?
             if (prevgate) {
                 ADSRstate[channel] &= 0xFF - (GATE_BITMASK | ATTACK_BITMASK | DECAYSUSTAIN_BITMASK);
-            }else { //falling edge
+            } else { //falling edge
                 ADSRstate[channel] = (GATE_BITMASK | ATTACK_BITMASK | DECAYSUSTAIN_BITMASK); //rising edge, also sets hold_zero_bit=0
                 //assume SR->GATE write order: workaround to have crisp soundstarts by triggering delay-bug
                 //(this is for the possible missed CTRL(GATE) vs SR register write order situations (1MHz CPU is cca 20 times faster than samplerate)
@@ -112,7 +114,7 @@ int SID(char num, unsigned int baseaddr) { //the SID emulation itself ('num' is 
         accuadd = (vReg[0] + vReg[1] * 256) * clock_ratio;
         if (test || ((ctrl & SYNC_BITMASK) && sourceMSBrise[num])) {
             phaseaccu[channel] = 0;
-        } else { 
+        } else {
             phaseaccu[channel] += accuadd;
             if (phaseaccu[channel] > 0xFFFFFF) phaseaccu[channel] -= 0x1000000;
         }
@@ -123,12 +125,13 @@ int SID(char num, unsigned int baseaddr) { //the SID emulation itself ('num' is 
                 //clock LFSR all time if clockrate exceeds observable at given samplerate 
                 step = (tmp & 0x400000) ^ ((tmp & 0x20000) << 5);
                 tmp = ((tmp << 1) + (step ? 1 : test)) & 0x7FFFFF;
-                noise_LFSR[channel]=tmp;
+                noise_LFSR[channel] = tmp;
             }
             //we simply zero output when other waveform is mixed with noise. On real SID LFSR continuously gets filled by zero and locks up. ($C1 waveform with pw<8 can keep it for a while...)
             wfout = (wf & 0x70) ? 0 : ((tmp & 0x100000) >> 5) + ((tmp & 0x40000) >> 4) + ((tmp & 0x4000) >> 1) + ((tmp & 0x800) << 1) + ((tmp & 0x200) << 2) + ((tmp & 0x20) << 5) + ((tmp & 0x04) << 7) + ((tmp & 0x01) << 8);
         } else if (wf & PULSE_BITMASK) { //simple pulse
-            pw = (vReg[2] + (vReg[3] & 0xF) * 256) * 16;  tmp = (int) accuadd >> 9;  
+            pw = (vReg[2] + (vReg[3] & 0xF) * 256) * 16;
+            tmp = (int) accuadd >> 9;  
             if (0 < pw && pw < tmp) pw = tmp;
             tmp ^= 0xFFFF;
             if (pw > tmp) pw = tmp;  
@@ -163,7 +166,7 @@ int SID(char num, unsigned int baseaddr) { //the SID emulation itself ('num' is 
             }
         } else if (wf&SAW_BITMASK) { //saw, band-limited
             wfout=phaseaccu[channel]>>8; //his row would be enough for simple but aliased-at-high-pitch saw
-            if (wf&TRI_BITMASK) { //saw+triangle
+            if (wf & TRI_BITMASK) { //saw+triangle
                 wfout = combinedWF(num,channel,TriSaw_8580,wfout>>4,1,vReg[1]);
             } else { //simple cleaned (bandlimited) saw
                 steep=(accuadd/65536.0)/288.0;
@@ -185,16 +188,16 @@ int SID(char num, unsigned int baseaddr) { //the SID emulation itself ('num' is 
         
         //routing the channel signal to either the filter or the unfiltered master output depending on filter-switch SID-registers
         if (sReg[0x17] & FILTSW[channel]) {
-            filtin += ((int)wfout - 0x8000) * envcnt[channel] / 256;
+            filtin += ((long int)wfout - 0x8000) * envcnt[channel] / 256;
         }else if ((FILTSW[channel] != 4) || !(sReg[0x18] & OFF3_BITMASK)) {
-            nonfilt += ((int)wfout - 0x8000) * envcnt[channel] / 256;
-        }         
+            nonfilt += ((long int)wfout - 0x8000) * envcnt[channel] / 256;
+        }
     }
     //update readable SID1-registers (some SID tunes might use 3rd channel ENV3/OSC3 value as control)
     if(num==0 && memory[1]&3) { //OSC3, ENV3 (some players rely on it)  
         sReg[0x1B]=wfout>>8;
         sReg[0x1C]=envcnt[3];
-    }  
+    }
     
     //FILTER:
     cutoff[num] = sReg[0x16] * 8 + (sReg[0x15] & 7);
