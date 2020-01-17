@@ -46,15 +46,20 @@ int SID(char num, unsigned int baseaddr)
                 if (!(ADSRstate[channel] & HOLDZERO_BITMASK)) {
                     if (ADSRstate[channel] & ATTACK_BITMASK) {
                         envcnt[channel]++;
-                        if (envcnt[channel]>=0xFF) {
-                            envcnt[channel]=0xFF;
+                        if (envcnt[channel]==0xFF) {
+                            //envcnt[channel]=0xFF;
                             ADSRstate[channel] &= 0xFF-ATTACK_BITMASK;
                         }
                     } else if ( !(ADSRstate[channel] & DECAYSUSTAIN_BITMASK) || envcnt[channel] != (SR>>4)+(SR&0xF0) ) {
                         envcnt[channel]--; //resid adds 1 cycle delay, we omit that pipelining mechanism here
-                        if (envcnt[channel]==0) ADSRstate[channel] |= HOLDZERO_BITMASK;
+                        if (envcnt[channel]==0) {
+                            //envcnt[channel]=0;
+                            ADSRstate[channel] |= HOLDZERO_BITMASK;
+                        }
                     }
                 }
+                //TODO: find out why envelopes fail if not wrapped around byte size
+                envcnt[channel] &=0xFF;
             }
         }
         
@@ -144,7 +149,7 @@ int SID(char num, unsigned int baseaddr)
             //below Vth treshold Vgs control-voltage FET presents an open circuit
             // rDS ~ (-Vth*rDSon) / (Vgs-Vth)  //above Vth FET drain-source resistance is proportional to reciprocal of cutoff-control voltage
             rDS_VCR_FET = cutoff[num]<=VCR_FET_TRESHOLD ? 100000000.0 : cutoff_steepness_6581/(cutoff[num]-VCR_FET_TRESHOLD);
-            cutoff[num] = ( 1 - exp( cap_6581_reciprocal / (VCR_SHUNT_6581*rDS_VCR_FET/(VCR_SHUNT_6581+rDS_VCR_FET)) / C64_PAL_CPUCLK ) ) * SCALE_CUTOFF; //curve with 1.5MOhm VCR parallel Rshunt emulation
+            cutoff[num] = ( 1 - exp( cap_6581_reciprocal / (VCR_SHUNT_6581*rDS_VCR_FET/(VCR_SHUNT_6581+rDS_VCR_FET)) / CLOCK_CPU_PAL ) ) * SCALE_CUTOFF; //curve with 1.5MOhm VCR parallel Rshunt emulation
             resonance[num] = ( (sReg[0x17] > 0x5F) ? 8.0 / (sReg[0x17] >> 4) : 1.41 ) * SCALE_RESO;
         }
     }
