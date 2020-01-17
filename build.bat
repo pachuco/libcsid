@@ -14,4 +14,6 @@ del csidfull.exe
 pushd src
 gcc -o ..\csidlight.exe main.c tinywinmm.c libcsid-light.c %opts% %link% 2> ..\errlight.log
 gcc -o ..\csidfull.exe main.c tinywinmm.c libcsid-full.c %opts% %link% 2>   ..\errfull.log
+gcc -o ..\csidfullorig.exe main.c tinywinmm.c libcsid-full-orig.c %opts% %link% 2>   ..\errfullorig.log
+gcc -o ..\csidlightorig.exe main.c tinywinmm.c libcsid-light-orig.c %opts% %link% 2> ..\errlightorig.log
 popd
