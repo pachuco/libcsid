@@ -15,7 +15,8 @@ typedef unsigned char byte;
 // global constants and variables
 #define C64_PAL_CPUCLK 985248.0
 #define SID_CHANNEL_AMOUNT 3
-#define PAL_FRAMERATE 49.4 //50.06 //50.0443427 //50.1245419 //(C64_PAL_CPUCLK/63/312.5), selected carefully otherwise some ADSR-sensitive tunes may suffer more.
+//selected carefully otherwise some ADSR-sensitive tunes may suffer more.
+#define PAL_FRAMERATE 50.06 //49.4 //50.06 //50.0443427 //50.1245419 //(CLOCK_CPU_PAL/63/312.5)
 
 
 int OUTPUT_SCALEDOWN = SID_CHANNEL_AMOUNT * 16 + 26; //compensation for main volume and also filter reso emphasis
