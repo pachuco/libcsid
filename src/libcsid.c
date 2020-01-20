@@ -58,9 +58,11 @@ char cycles=0, finished=0, dynCIA=0;
  #define FILTER_DISTORTION_6581 0.0032 //0.0016 //the bigger the value the more of resistance-modulation (filter distortion) is applied for 6581 cutoff-control
  float cutoff_ratio_8580, cutoff_steepness_6581, cap_6581_reciprocal;
  float cutoff_ratio_6581, cutoff_bias_6581;
+ #define CLOCK_RATIO_DEFAULT CLOCK_CPU_PAL/DEFAULT_SAMPLERATE  //(50.0567520: lowest framerate where Sanxion is fine, and highest where Myth is almost fine)
+ 
+ float clock_ratio=CLOCK_RATIO_DEFAULT;
 #ifdef LIBCSID_FULL
  //SID-emulation variables:
- float clock_ratio=22; 
  unsigned int ratecnt[9];
  unsigned long int phaseaccu[9], prevaccu[9];
  //float cutoff_ratio_6581, cutoff_bias_6581;
@@ -69,9 +71,6 @@ char cycles=0, finished=0, dynCIA=0;
  //CPU (and CIA/VIC-IRQ) emulation constants and variables - avoiding internal/automatic variables to retain speed
  char CPUtime=0;
 #else
- #define CLOCK_RATIO_DEFAULT CLOCK_CPU_PAL/DEFAULT_SAMPLERATE  //(50.0567520: lowest framerate where Sanxion is fine, and highest where Myth is almost fine)
- 
- float clock_ratio=CLOCK_RATIO_DEFAULT;
  //SID-emulation variables:
  unsigned long int prevwavdata[9];
  long int phaseaccu[9], prevaccu[9];

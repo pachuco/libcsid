@@ -41,14 +41,14 @@
 //This solved 2 issues: Thanks to the lowpass filtering of the volume-control, SID tunes where digi is played together with normal SID channels,
 //won't sound distorted anymore, and the volume-clicks disappear when setting SID-volume. (This is useful for fade-in/out tunes like Hades Nebula, where clicking ruins the intro.)
 
-int SID(char sidNum, unsigned int baseaddr) { //the SID emulation itself ('sidNum' is the number of SID to iterate (0..2)
+int SID(char sidNum, unsigned int baseaddr) {
     
     //better keep these variables static so they won't slow down the routine like if they were internal automatic variables always recreated
     static byte channel, ctrl, SR, prevgate, wf, test;
     static byte *sReg, *vReg;
     static unsigned int accuadd, pw, wfout;
     static unsigned long int MSB;
-    static int tmp, step, lim, nonfilt, filtin, filtout, output, cutoff[3], resonance[3];
+    static int step, lim, nonfilt, filtin, filtout, output, cutoff[3], resonance[3];
     static float period, steep, ftmp;
     #define INTERNAL_RATE samplerate
     
@@ -58,27 +58,27 @@ int SID(char sidNum, unsigned int baseaddr) { //the SID emulation itself ('sidNu
     
     //treating 2SID and 3SID channels uniformly (0..5 / 0..8), this probably avoids some extra code
     for (channel = sidNum * SID_CHANNEL_AMOUNT ; channel < (sidNum + 1) * SID_CHANNEL_AMOUNT ; channel++, vReg += 7) {
-        int trig;
-
-        ctrl = vReg[4];
+        #ifndef LIBCSID_FULL
+         int trig = 0;
+        #endif
         
-        //ADSR envelope-generator:
+        //ADSR envelope generator:
+        ctrl = vReg[4];
         SR = vReg[6];
-        trig = 0;
         prevgate = (ADSRstate[channel] & GATE_BITMASK);
         if (prevgate != (ctrl & GATE_BITMASK)) { //gatebit-change?
             if (prevgate) {
                 ADSRstate[channel] &= 0xFF - (GATE_BITMASK | ATTACK_BITMASK | DECAYSUSTAIN_BITMASK);
             } else { //falling edge
                 ADSRstate[channel] = (GATE_BITMASK | ATTACK_BITMASK | DECAYSUSTAIN_BITMASK); //rising edge, also sets hold_zero_bit=0
-                //assume SR->GATE write order: workaround to have crisp soundstarts by triggering delay-bug
-                //(this is for the possible missed CTRL(GATE) vs SR register write order situations (1MHz CPU is cca 20 times faster than samplerate)
-                if ((SR & 0xF) > (prevSR[channel] & 0xF)) trig = 1;
+                #ifndef LIBCSID_FULL
+                 //assume SR->GATE write order: workaround to have crisp soundstarts by triggering delay-bug
+                 //(this is for the possible missed CTRL(GATE) vs SR register write order situations (1MHz CPU is cca 20 times faster than samplerate)
+                 if ((SR & 0xF) > (prevSR[channel] & 0xF)) trig = 1;
+                #endif
             }
         }
-        prevSR[channel] = SR; //if(SR&0xF) ratecnt[channel]+=5;  //assume SR->GATE write order: workaround to have crisp soundstarts by triggering delay-bug
-        ratecnt[channel] += clock_ratio;
-        if (ratecnt[channel] >= 0x8000) ratecnt[channel] -= 0x8000; //can wrap around (ADSR delay-bug: short 1st frame)
+
         //set ADSR period that should be checked against rate-counter (depending on ADSR state Attack/DecaySustain/Release)
         if (ADSRstate[channel] & ATTACK_BITMASK) {
             step = vReg[5] >> 4;
@@ -89,6 +89,11 @@ int SID(char sidNum, unsigned int baseaddr) { //the SID emulation itself ('sidNu
         }
         period = ADSRperiods[step];
         step = ADSRstep[step];
+
+        prevSR[channel] = SR; //if(SR&0xF) ratecnt[channel]+=5;  //assume SR->GATE write order: workaround to have crisp soundstarts by triggering delay-bug
+        ratecnt[channel] += clock_ratio;
+        //ratecnt[channel] &= 0x7FFF;
+        if (ratecnt[channel] >= 0x8000) ratecnt[channel] -= 0x8000; //can wrap around (ADSR delay-bug: short 1st frame)
         if (ratecnt[channel] >= period && ratecnt[channel] < period + clock_ratio && trig == 0) { //ratecounter shot (matches rateperiod) (in genuine SID ratecounter is LFSR)
             ratecnt[channel] -= period; //compensation for timing instead of simply setting 0 on rate-counter overload
             if ((ADSRstate[channel] & ATTACK_BITMASK) || ++expcnt[channel] == ADSR_exptable[envcnt[channel]]) {
@@ -100,20 +105,21 @@ int SID(char sidNum, unsigned int baseaddr) { //the SID emulation itself ('sidNu
                             envcnt[channel]=0xFF;
                             ADSRstate[channel] &= 0xFF-ATTACK_BITMASK;
                         }
-                    } else if ( !(ADSRstate[channel] & DECAYSUSTAIN_BITMASK) || envcnt[channel] > (SR&0xF0) + (SR>>4) ) {
+                    } else if ( !(ADSRstate[channel] & DECAYSUSTAIN_BITMASK) || envcnt[channel] > (SR&0xF0) + (SR>>4)) {
                         envcnt[channel]-=step;
                         if (envcnt[channel]<=0 && envcnt[channel]+step!=0) {
                             envcnt[channel]=0;
                             ADSRstate[channel]|=HOLDZERO_BITMASK;
                         }
                     }
-
+                //TODO: find out why envelopes fail if not wrapped around byte size
+                envcnt[channel] &=0xFF;
                 }
             }
         }
-        envcnt[channel] &= 0xFF;
+
         
-        //WAVE-generation code (phase accumulator and waveform-selector):
+        //WAVE generation code (phase accumulator and waveform-selector):
         test = ctrl & TEST_BITMASK;
         wf = ctrl & 0xF0;
         accuadd = (vReg[0] + vReg[1] * 256) * clock_ratio;
@@ -122,8 +128,9 @@ int SID(char sidNum, unsigned int baseaddr) { //the SID emulation itself ('sidNu
         } else {
             phaseaccu[channel] += accuadd;
             if (phaseaccu[channel] > 0xFFFFFF) phaseaccu[channel] -= 0x1000000;
+            phaseaccu[channel] &= 0xFFFFFF;
         }
-        phaseaccu[channel] &= 0xFFFFFF;
+        
         MSB = phaseaccu[channel] & 0x800000;
         sourceMSBrise[sidNum] = (MSB > (prevaccu[channel] & 0x800000)) ? 1 : 0;
         if (wf & NOISE_BITMASK) { //noise waveform
@@ -137,37 +144,51 @@ int SID(char sidNum, unsigned int baseaddr) { //the SID emulation itself ('sidNu
             wfout = (wf & 0x70) ? 0 : ((tmp & 0x100000) >> 5) + ((tmp & 0x40000) >> 4) + ((tmp & 0x4000) >> 1) + ((tmp & 0x800) << 1) + ((tmp & 0x200) << 2) + ((tmp & 0x20) << 5) + ((tmp & 0x04) << 7) + ((tmp & 0x01) << 8);
         } else if (wf & PULSE_BITMASK) { //simple pulse
             pw = (vReg[2] + (vReg[3] & 0xF) * 256) * 16;
-            int tmp = (int) accuadd >> 9;  
-            if (0 < pw && pw < tmp) pw = tmp;
-            tmp ^= 0xFFFF;
-            if (pw > tmp) pw = tmp;  
+
+            #ifdef LIBCSID_FULL
+             int tmp;
+            #else
+             int tmp = (int) accuadd >> 9;  
+             if (0 < pw && pw < tmp) pw = tmp;
+             tmp ^= 0xFFFF;
+             if (pw > tmp) pw = tmp;
+            #endif
+
             tmp = phaseaccu[channel] >> 8;
-            if (wf == PULSE_BITMASK) { //simple pulse, band-limited
-                step = (accuadd>=255)? 65535/(accuadd/256.0) : 0xFFFF;
-                if (test) {
-                    wfout=0xFFFF;
-                } else if (tmp<pw) { //rising edge
-                    lim=(0xFFFF-pw)*step;
-                    if (lim>0xFFFF) lim=0xFFFF;
-                    tmp=lim-(pw-tmp)*step;
-                    wfout=(tmp<0)?0:tmp;
-                } else { //falling edge
-                    lim=pw*step;
-                    if (lim>0xFFFF) lim=0xFFFF;
-                    tmp=(0xFFFF-tmp)*step-lim;
-                    wfout=(tmp>=0)?0xFFFF:tmp;
-                } 
+            if (wf == PULSE_BITMASK) { //simple pulse
+                #ifdef LIBCSID_FULL
+                 if (test || tmp>=pw) { //rising edge
+                     wfout = 0xFFFF;
+                 } else { //falling edge
+                     wfout=0;
+                 }
+                #else //bandlimited
+                 step = (accuadd>=255)? 65535/(accuadd/256.0) : 0xFFFF;
+                 if (test) {
+                     wfout=0xFFFF;
+                 } else if (tmp<pw) { //rising edge
+                     lim=(0xFFFF-pw)*step;
+                     if (lim>0xFFFF) lim=0xFFFF;
+                     tmp=lim-(pw-tmp)*step;
+                     wfout=(tmp<0)?0:tmp;
+                 } else { //falling edge
+                     lim=pw*step;
+                     if (lim>0xFFFF) lim=0xFFFF;
+                     tmp=(0xFFFF-tmp)*step-lim;
+                     wfout=(tmp>=0)?0xFFFF:tmp;
+                 }
+                #endif
             } else { //combined pulse
-                wfout = (tmp >= pw || test) ? 0xFFFF:0; //(this would be enough for a simple but aliased-at-high-pitches pulse)
+                wfout = (tmp >= pw || test) ? 0xFFFF : 0; //(this would be enough for a simple but aliased-at-high-pitches pulse)
                 if (wf & TRI_BITMASK) { 
                     if (wf & SAW_BITMASK) { //pulse+saw+triangle (waveform nearly identical to tri+saw)
-                        wfout = wfout? combinedWF(sidNum,channel,PulseTriSaw_8580,tmp>>4,1,vReg[1]) : 0;
+                        wfout = wfout ? combinedWF(sidNum, channel, PulseTriSaw_8580, tmp>>4, 1, vReg[1]) : 0;
                     } else { //pulse+triangle
                         tmp=phaseaccu[channel]^(ctrl&RING_BITMASK?sourceMSB[sidNum]:0);
-                        wfout = (wfout)? combinedWF(sidNum,channel,PulseSaw_8580,(tmp^(tmp&0x800000?0xFFFFFF:0))>>11,0,vReg[1]) : 0;
+                        wfout = wfout ? combinedWF(sidNum, channel, PulseSaw_8580, (tmp ^ (tmp & 0x800000 ? 0xFFFFFF : 0)) >> 11, 0, vReg[1]) : 0;
                     }
                 } else if (wf & SAW_BITMASK) { //pulse+triangle
-                    wfout = wfout? combinedWF(sidNum,channel,PulseSaw_8580,tmp>>4,1,vReg[1]) : 0;
+                    wfout = wfout ? combinedWF(sidNum, channel, PulseSaw_8580, tmp>>4, 1, vReg[1]) : 0;
                 }
             }
         } else if (wf&SAW_BITMASK) { //saw, band-limited
@@ -180,10 +201,11 @@ int SID(char sidNum, unsigned int baseaddr) { //the SID emulation itself ('sidNu
                 if(wfout>0xFFFF) wfout=0xFFFF-(wfout-0x10000)/steep; 
             } 
         } else if (wf & TRI_BITMASK) { //triangle (this waveform has no harsh edges, so it doesn't suffer from strong aliasing at high pitches)
-            tmp = phaseaccu[channel] ^ (ctrl & RING_BITMASK ? sourceMSB[sidNum] : 0);
+            int tmp = phaseaccu[channel] ^ (ctrl & RING_BITMASK ? sourceMSB[sidNum] : 0);
             wfout = (tmp ^ (tmp & 0x800000 ? 0xFFFFFF : 0)) >> 7;
         }
         wfout&=0xFFFF;
+
         if (wf) { //emulate waveform 00 floating wave-DAC (on real SID waveform00 decays after 15s..50s depending on temperature?)
             prevwfout[channel] = wfout;
         } else {
