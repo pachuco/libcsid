@@ -13,13 +13,22 @@
 typedef unsigned char byte;
 
 // global constants and variables
-#define C64_PAL_CPUCLK 985248.0
+#define CLOCK_MASTER_PAL  17734475
+#define CLOCK_MASTER_NTSC 14318180
+//WARN: required as float for csid-light
+#define CLOCK_CPU_PAL     985248.f    // CLOCK_MASTER_PAL  / 18
+#define CLOCK_CPU_NTSC    1022727.f   // CLOCK_MASTER_NTSC / 14
+#define CLOCK_VICII_PAL   7881984
+#define CLOCK_VICII_NTSC  8181816
+
 #define SID_CHANNEL_AMOUNT 3
 //selected carefully otherwise some ADSR-sensitive tunes may suffer more.
-#define PAL_FRAMERATE 50.06 //49.4 //50.06 //50.0443427 //50.1245419 //(CLOCK_CPU_PAL/63/312.5)
+#define PAL_FRAMERATE 50.06f //49.4 //50.06 //50.0443427 //50.1245419 //(CLOCK_CPU_PAL/63/312.5)
 
 
 int OUTPUT_SCALEDOWN = SID_CHANNEL_AMOUNT * 16 + 26; //compensation for main volume and also filter reso emphasis
+
+
 
 //SID-emulation variables:
 byte ADSRstate[9], expcnt[9], sourceMSBrise[9], prevSR[9];
@@ -48,6 +57,7 @@ char cycles=0, finished=0, dynCIA=0;
  #define FILTER_DARKNESS_6581 33.0 //22.0 //the bigger the value, the darker the filter control is (that is, cutoff frequency increases less with the same cutoff-value)
  #define FILTER_DISTORTION_6581 0.0032 //0.0016 //the bigger the value the more of resistance-modulation (filter distortion) is applied for 6581 cutoff-control
  float cutoff_ratio_8580, cutoff_steepness_6581, cap_6581_reciprocal;
+ float cutoff_ratio_6581, cutoff_bias_6581;
 #ifdef LIBCSID_FULL
  //SID-emulation variables:
  float clock_ratio=22; 
@@ -59,7 +69,7 @@ char cycles=0, finished=0, dynCIA=0;
  //CPU (and CIA/VIC-IRQ) emulation constants and variables - avoiding internal/automatic variables to retain speed
  char CPUtime=0;
 #else
- #define CLOCK_RATIO_DEFAULT C64_PAL_CPUCLK/DEFAULT_SAMPLERATE  //(50.0567520: lowest framerate where Sanxion is fine, and highest where Myth is almost fine)
+ #define CLOCK_RATIO_DEFAULT CLOCK_CPU_PAL/DEFAULT_SAMPLERATE  //(50.0567520: lowest framerate where Sanxion is fine, and highest where Myth is almost fine)
  
  float clock_ratio=CLOCK_RATIO_DEFAULT;
  //SID-emulation variables:
@@ -73,10 +83,10 @@ char cycles=0, finished=0, dynCIA=0;
 #endif
 
 enum {
-    GATE_BITMASK=0x01,     SYNC_BITMASK=0x02,         RING_BITMASK=0x04,   TEST_BITMASK=0x08,
-    TRI_BITMASK=0x10,      SAW_BITMASK=0x20,          PULSE_BITMASK=0x40,  NOISE_BITMASK=0x80,
-    HOLDZERO_BITMASK=0x10, DECAYSUSTAIN_BITMASK=0x40, ATTACK_BITMASK=0x80, LOWPASS_BITMASK=0x10,
-    BANDPASS_BITMASK=0x20, HIGHPASS_BITMASK=0x40,     OFF3_BITMASK=0x80
+    GATE_BITMASK=0x01,     SYNC_BITMASK=0x02,         RING_BITMASK=0x04,     TEST_BITMASK=0x08,
+    TRI_BITMASK=0x10,      SAW_BITMASK=0x20,          PULSE_BITMASK=0x40,    NOISE_BITMASK=0x80,
+    HOLDZERO_BITMASK=0x10, DECAYSUSTAIN_BITMASK=0x40, ATTACK_BITMASK=0x80,
+    LOWPASS_BITMASK=0x10,  BANDPASS_BITMASK=0x20,     HIGHPASS_BITMASK=0x40, OFF3_BITMASK=0x80
 };
 
 //function prototypes
@@ -205,7 +215,10 @@ void initCPU(unsigned int mempos) {
 //Thanks to the hardware being in my mind when coding this, the illegal instructions could be added fairly easily...
 byte CPU () { //the CPU emulation for SID/PRG playback (ToDo: CIA/VIC-IRQ/NMI/RESET vectors, BCD-mode)
     //'IR' is the instruction-register, naming after the hardware-equivalent
-    IR=memory[PC]; cycles=2; storadd=0; //'cycle': ensure smallest 6510 runtime (for implied/register instructions)
+    //'cycle': ensure smallest 6510 runtime (for implied/register instructions)
+    IR=memory[PC];
+    cycles=2;
+    storadd=0;
     
     //nybble2:  1/5/9/D:accu.instructions, 3/7/B/F:illegal opcodes
     if(IR&1) {
@@ -744,7 +757,9 @@ void initSID() {
     for(i=0xDE00;i<=0xDFFF;i++) memory[i]=0;
     for(i=0;i<9;i++) {
         ADSRstate[i]=HOLDZERO_BITMASK;
-        ratecnt[i]=envcnt[i]=expcnt[i]=0;
+        ratecnt[i] = 0;
+        envcnt[i] = 0;
+        expcnt[i] = 0;
     } 
 }
 
@@ -754,16 +769,16 @@ void cSID_init(int samplerate) {
     cap_6581_reciprocal = -1000000/CAP_6581;
     cutoff_steepness_6581 = FILTER_DARKNESS_6581*(2048.0-VCR_FET_TRESHOLD);
     #ifdef LIBCSID_FULL
-     clock_ratio = round(C64_PAL_CPUCLK/samplerate);
-     cutoff_ratio_8580 = -2 * 3.14 * (12500.0 / 2048) / C64_PAL_CPUCLK;
-     //cutoff_ratio_6581 = -2 * 3.14 * (20000.0 / 2048) / C64_PAL_CPUCLK;
-     //cutoff_bias_6581 = 1 - exp( -2 * 3.14 * 220 / C64_PAL_CPUCLK ); //around 220Hz below treshold
+     clock_ratio = round(CLOCK_CPU_PAL/samplerate);
+     cutoff_ratio_8580 = -2 * 3.14 * (12500.0 / 2048) / CLOCK_CPU_PAL;
+     cutoff_ratio_6581 = -2 * 3.14 * (20000.0 / 2048) / CLOCK_CPU_PAL;
+     cutoff_bias_6581 = 1 - exp( -2 * 3.14 * 220 / CLOCK_CPU_PAL ); //around 220Hz below treshold
      
      createCombinedWF(TriSaw_8580, 0.5, 2.2, 0.9);
      createCombinedWF(PulseSaw_8580, 0.23, 1.27, 0.55);
      createCombinedWF(PulseTriSaw_8580, 0.5, 1.6, 0.8);
     #else
-     clock_ratio = C64_PAL_CPUCLK/samplerate;
+     clock_ratio = CLOCK_CPU_PAL/samplerate;
      if (clock_ratio>9) {
          ADSRperiods[0]=clock_ratio;
          ADSRstep[0]=ceil(clock_ratio/9.0);
@@ -900,7 +915,7 @@ const int libcsid_getsubtunenum() {
 
 void libcsid_init(int _samplerate, int _sidmodel) {
     samplerate = _samplerate;
-    sampleratio = round(C64_PAL_CPUCLK / samplerate);
+    sampleratio = round(CLOCK_CPU_PAL / samplerate);
     requested_SID_model = _sidmodel;
 }
 

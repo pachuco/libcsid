@@ -1,12 +1,12 @@
 #include "libcsid.c"
 
-//Applies mostly to csid light
 //My SID implementation is similar to what I worked out in a SwinSID variant during 3..4 months of development. (So jsSID only took 2 weeks armed with this experience.)
 //I learned the workings of ADSR/WAVE/filter operations mainly from the quite well documented resid and resid-fp codes.
 //(The SID reverse-engineering sites were also good sources.)
 //Note that I avoided many internal/automatic variables from the SID function, assuming better speed this way. (Not using stack as much, but I'm not sure and it may depend on platform...)
 //(The same is true for CPU emulation and player-code.)
 //
+//Any mention of anti-aliasing applies only to csid-light variant.
 //Generator, pulse:
 //One of my biggest success with the SwinSID-variant was that I could clean the high-pitched and thin sounds.
 //(You might have faced with the unpleasant sound quality of high-pitched sounds without oversampling. We need so-called 'band-limited' synthesis instead.
@@ -41,7 +41,7 @@
 //This solved 2 issues: Thanks to the lowpass filtering of the volume-control, SID tunes where digi is played together with normal SID channels,
 //won't sound distorted anymore, and the volume-clicks disappear when setting SID-volume. (This is useful for fade-in/out tunes like Hades Nebula, where clicking ruins the intro.)
 
-int SID(char num, unsigned int baseaddr) { //the SID emulation itself ('num' is the number of SID to iterate (0..2)
+int SID(char sidNum, unsigned int baseaddr) { //the SID emulation itself ('sidNum' is the number of SID to iterate (0..2)
     
     //better keep these variables static so they won't slow down the routine like if they were internal automatic variables always recreated
     static byte channel, ctrl, SR, prevgate, wf, test;
@@ -49,18 +49,22 @@ int SID(char num, unsigned int baseaddr) { //the SID emulation itself ('num' is 
     static unsigned int accuadd, pw, wfout;
     static unsigned long int MSB;
     static int tmp, step, lim, nonfilt, filtin, filtout, output, cutoff[3], resonance[3];
-    static float period, steep, rDS_VCR_FET, ftmp;
+    static float period, steep, ftmp;
+    #define INTERNAL_RATE samplerate
     
     filtin=nonfilt=0;
     sReg = &memory[baseaddr];
     vReg = sReg;
     
     //treating 2SID and 3SID channels uniformly (0..5 / 0..8), this probably avoids some extra code
-    for (channel = num * SID_CHANNEL_AMOUNT ; channel < (num + 1) * SID_CHANNEL_AMOUNT ; channel++, vReg += 7) {
+    for (channel = sidNum * SID_CHANNEL_AMOUNT ; channel < (sidNum + 1) * SID_CHANNEL_AMOUNT ; channel++, vReg += 7) {
+        int trig;
+
         ctrl = vReg[4];
         
         //ADSR envelope-generator:
-        SR = vReg[6]; tmp = 0;
+        SR = vReg[6];
+        trig = 0;
         prevgate = (ADSRstate[channel] & GATE_BITMASK);
         if (prevgate != (ctrl & GATE_BITMASK)) { //gatebit-change?
             if (prevgate) {
@@ -69,7 +73,7 @@ int SID(char num, unsigned int baseaddr) { //the SID emulation itself ('num' is 
                 ADSRstate[channel] = (GATE_BITMASK | ATTACK_BITMASK | DECAYSUSTAIN_BITMASK); //rising edge, also sets hold_zero_bit=0
                 //assume SR->GATE write order: workaround to have crisp soundstarts by triggering delay-bug
                 //(this is for the possible missed CTRL(GATE) vs SR register write order situations (1MHz CPU is cca 20 times faster than samplerate)
-                if ((SR & 0xF) > (prevSR[channel] & 0xF)) tmp = 1;
+                if ((SR & 0xF) > (prevSR[channel] & 0xF)) trig = 1;
             }
         }
         prevSR[channel] = SR; //if(SR&0xF) ratecnt[channel]+=5;  //assume SR->GATE write order: workaround to have crisp soundstarts by triggering delay-bug
@@ -85,9 +89,10 @@ int SID(char num, unsigned int baseaddr) { //the SID emulation itself ('num' is 
         }
         period = ADSRperiods[step];
         step = ADSRstep[step];
-        if (ratecnt[channel] >= period && ratecnt[channel] < period + clock_ratio && tmp == 0) { //ratecounter shot (matches rateperiod) (in genuine SID ratecounter is LFSR)
+        if (ratecnt[channel] >= period && ratecnt[channel] < period + clock_ratio && trig == 0) { //ratecounter shot (matches rateperiod) (in genuine SID ratecounter is LFSR)
             ratecnt[channel] -= period; //compensation for timing instead of simply setting 0 on rate-counter overload
             if ((ADSRstate[channel] & ATTACK_BITMASK) || ++expcnt[channel] == ADSR_exptable[envcnt[channel]]) {
+                expcnt[channel] = 0;
                 if (!(ADSRstate[channel] & HOLDZERO_BITMASK)) {
                     if (ADSRstate[channel] & ATTACK_BITMASK) {
                         envcnt[channel]+=step;
@@ -102,8 +107,8 @@ int SID(char num, unsigned int baseaddr) { //the SID emulation itself ('num' is 
                             ADSRstate[channel]|=HOLDZERO_BITMASK;
                         }
                     }
+
                 }
-                expcnt[channel] = 0;
             }
         }
         envcnt[channel] &= 0xFF;
@@ -112,26 +117,27 @@ int SID(char num, unsigned int baseaddr) { //the SID emulation itself ('num' is 
         test = ctrl & TEST_BITMASK;
         wf = ctrl & 0xF0;
         accuadd = (vReg[0] + vReg[1] * 256) * clock_ratio;
-        if (test || ((ctrl & SYNC_BITMASK) && sourceMSBrise[num])) {
+        if (test || ((ctrl & SYNC_BITMASK) && sourceMSBrise[sidNum])) {
             phaseaccu[channel] = 0;
         } else {
             phaseaccu[channel] += accuadd;
             if (phaseaccu[channel] > 0xFFFFFF) phaseaccu[channel] -= 0x1000000;
         }
-        phaseaccu[channel] &= 0xFFFFFF; MSB = phaseaccu[channel] & 0x800000; sourceMSBrise[num] = (MSB > (prevaccu[channel] & 0x800000)) ? 1 : 0;
+        phaseaccu[channel] &= 0xFFFFFF;
+        MSB = phaseaccu[channel] & 0x800000;
+        sourceMSBrise[sidNum] = (MSB > (prevaccu[channel] & 0x800000)) ? 1 : 0;
         if (wf & NOISE_BITMASK) { //noise waveform
-            tmp = noise_LFSR[channel];
+            int tmp = noise_LFSR[channel];
             if (((phaseaccu[channel] & 0x100000) != (prevaccu[channel] & 0x100000)) || accuadd >= 0x100000) {
-                //clock LFSR all time if clockrate exceeds observable at given samplerate 
-                step = (tmp & 0x400000) ^ ((tmp & 0x20000) << 5);
-                tmp = ((tmp << 1) + (step ? 1 : test)) & 0x7FFFFF;
+                //clock LFSR all time if clockrate exceeds observable at given samplerate
+                tmp = ((tmp << 1) + (((tmp & 0x400000) ^ ((tmp & 0x20000) << 5)) ? 1 : test)) & 0x7FFFFF;
                 noise_LFSR[channel] = tmp;
             }
             //we simply zero output when other waveform is mixed with noise. On real SID LFSR continuously gets filled by zero and locks up. ($C1 waveform with pw<8 can keep it for a while...)
             wfout = (wf & 0x70) ? 0 : ((tmp & 0x100000) >> 5) + ((tmp & 0x40000) >> 4) + ((tmp & 0x4000) >> 1) + ((tmp & 0x800) << 1) + ((tmp & 0x200) << 2) + ((tmp & 0x20) << 5) + ((tmp & 0x04) << 7) + ((tmp & 0x01) << 8);
         } else if (wf & PULSE_BITMASK) { //simple pulse
             pw = (vReg[2] + (vReg[3] & 0xF) * 256) * 16;
-            tmp = (int) accuadd >> 9;  
+            int tmp = (int) accuadd >> 9;  
             if (0 < pw && pw < tmp) pw = tmp;
             tmp ^= 0xFFFF;
             if (pw > tmp) pw = tmp;  
@@ -153,29 +159,29 @@ int SID(char num, unsigned int baseaddr) { //the SID emulation itself ('num' is 
                 } 
             } else { //combined pulse
                 wfout = (tmp >= pw || test) ? 0xFFFF:0; //(this would be enough for a simple but aliased-at-high-pitches pulse)
-                if (wf&TRI_BITMASK) { 
-                    if (wf&SAW_BITMASK) { //pulse+saw+triangle (waveform nearly identical to tri+saw)
-                        wfout = wfout? combinedWF(num,channel,PulseTriSaw_8580,tmp>>4,1,vReg[1]) : 0;
+                if (wf & TRI_BITMASK) { 
+                    if (wf & SAW_BITMASK) { //pulse+saw+triangle (waveform nearly identical to tri+saw)
+                        wfout = wfout? combinedWF(sidNum,channel,PulseTriSaw_8580,tmp>>4,1,vReg[1]) : 0;
                     } else { //pulse+triangle
-                        tmp=phaseaccu[channel]^(ctrl&RING_BITMASK?sourceMSB[num]:0);
-                        wfout = (wfout)? combinedWF(num,channel,PulseSaw_8580,(tmp^(tmp&0x800000?0xFFFFFF:0))>>11,0,vReg[1]) : 0;
+                        tmp=phaseaccu[channel]^(ctrl&RING_BITMASK?sourceMSB[sidNum]:0);
+                        wfout = (wfout)? combinedWF(sidNum,channel,PulseSaw_8580,(tmp^(tmp&0x800000?0xFFFFFF:0))>>11,0,vReg[1]) : 0;
                     }
-                } else if (wf&SAW_BITMASK) {
-                    wfout = wfout? combinedWF(num,channel,PulseSaw_8580,tmp>>4,1,vReg[1]) : 0;
+                } else if (wf & SAW_BITMASK) { //pulse+triangle
+                    wfout = wfout? combinedWF(sidNum,channel,PulseSaw_8580,tmp>>4,1,vReg[1]) : 0;
                 }
             }
         } else if (wf&SAW_BITMASK) { //saw, band-limited
             wfout=phaseaccu[channel]>>8; //his row would be enough for simple but aliased-at-high-pitch saw
             if (wf & TRI_BITMASK) { //saw+triangle
-                wfout = combinedWF(num,channel,TriSaw_8580,wfout>>4,1,vReg[1]);
+                wfout = combinedWF(sidNum,channel,TriSaw_8580,wfout>>4,1,vReg[1]);
             } else { //simple cleaned (bandlimited) saw
                 steep=(accuadd/65536.0)/288.0;
                 wfout += wfout*steep;
                 if(wfout>0xFFFF) wfout=0xFFFF-(wfout-0x10000)/steep; 
             } 
-        } else if (wf&TRI_BITMASK) { //triangle (this waveform has no harsh edges, so it doesn't suffer from strong aliasing at high pitches)
-            tmp=phaseaccu[channel]^(ctrl&RING_BITMASK?sourceMSB[num]:0);
-            wfout = (tmp^(tmp&0x800000?0xFFFFFF:0)) >> 7; 
+        } else if (wf & TRI_BITMASK) { //triangle (this waveform has no harsh edges, so it doesn't suffer from strong aliasing at high pitches)
+            tmp = phaseaccu[channel] ^ (ctrl & RING_BITMASK ? sourceMSB[sidNum] : 0);
+            wfout = (tmp ^ (tmp & 0x800000 ? 0xFFFFFF : 0)) >> 7;
         }
         wfout&=0xFFFF;
         if (wf) { //emulate waveform 00 floating wave-DAC (on real SID waveform00 decays after 15s..50s depending on temperature?)
@@ -184,7 +190,7 @@ int SID(char num, unsigned int baseaddr) { //the SID emulation itself ('num' is 
             wfout = prevwfout[channel];
         }
         prevaccu[channel] = phaseaccu[channel];
-        sourceMSB[num] = MSB; //(So the decay is not an exact value. Anyway, we just simply keep the value to avoid clicks and support SounDemon digi later...)
+        sourceMSB[sidNum] = MSB; //(So the decay is not an exact value. Anyway, we just simply keep the value to avoid clicks and support SounDemon digi later...)
         
         //routing the channel signal to either the filter or the unfiltered master output depending on filter-switch SID-registers
         if (sReg[0x17] & FILTSW[channel]) {
@@ -194,38 +200,55 @@ int SID(char num, unsigned int baseaddr) { //the SID emulation itself ('num' is 
         }
     }
     //update readable SID1-registers (some SID tunes might use 3rd channel ENV3/OSC3 value as control)
-    if(num==0 && memory[1]&3) { //OSC3, ENV3 (some players rely on it)  
+    if(sidNum==0 && memory[1]&3) { //OSC3, ENV3 (some players rely on it)  
         sReg[0x1B]=wfout>>8;
         sReg[0x1C]=envcnt[3];
     }
     
     //FILTER:
-    cutoff[num] = sReg[0x16] * 8 + (sReg[0x15] & 7);
     #define SCALE_CUTOFF 0x10000
     #define SCALE_RESO   0x100
-    if (SID_model[num] == 8580) {
-        cutoff[num] = ( 1 - exp((cutoff[num]+2) * cutoff_ratio_8580) ) * SCALE_CUTOFF; //linear curve by resistor-ladder VCR
-        resonance[num] = ( pow(2, ((4 - (sReg[0x17] >> 4)) / 8.0)) ) * SCALE_RESO;
-    } else { //6581
-        cutoff[num] += round(filtin*FILTER_DISTORTION_6581); //MOSFET-VCR control-voltage-modulation (resistance-modulation aka 6581 filter distortion) emulation
-        //below Vth treshold Vgs control-voltage FET presents an open circuit
-        // rDS ~ (-Vth*rDSon) / (Vgs-Vth)  //above Vth FET drain-source resistance is proportional to reciprocal of cutoff-control voltage
-        rDS_VCR_FET = cutoff[num]<=VCR_FET_TRESHOLD ? 100000000.0 : cutoff_steepness_6581/(cutoff[num]-VCR_FET_TRESHOLD);
-        cutoff[num] = ( 1 - exp( cap_6581_reciprocal / (VCR_SHUNT_6581*rDS_VCR_FET/(VCR_SHUNT_6581+rDS_VCR_FET)) / samplerate ) ) * SCALE_CUTOFF; //curve with 1.5MOhm VCR parallel Rshunt emulation
-        resonance[num] = ( (sReg[0x17] > 0x5F) ? 8.0 / (sReg[0x17] >> 4) : 1.41 ) * SCALE_RESO;
-    }
+    #ifdef LIBCSID_FULL
+     //calculate cutoff and resonance curves only at samplerate is still adequate and reduces CPU stress of frequent float calculations
+     filterctrl_prescaler[sidNum]--;
+     if (filterctrl_prescaler[sidNum]==0) {
+         filterctrl_prescaler[sidNum]=clock_ratio;
+    #endif
+        cutoff[sidNum] = 2 + sReg[0x16] * 8 + (sReg[0x15] & 7); //WARN: csid-light does not 2+, why?
+        if (SID_model[sidNum] == 8580) {
+            cutoff[sidNum] = ( 1 - exp((cutoff[sidNum]+2) * cutoff_ratio_8580) ) * SCALE_CUTOFF; //linear curve by resistor-ladder VCR
+            resonance[sidNum] = ( pow(2, ((4 - (sReg[0x17] >> 4)) / 8.0)) ) * SCALE_RESO;
+        } else { //6581
+            #if 1
+             float rDS_VCR_FET;
+             cutoff[sidNum] += round(filtin*FILTER_DISTORTION_6581); //MOSFET-VCR control-voltage-modulation (resistance-modulation aka 6581 filter distortion) emulation
+             //below Vth treshold Vgs control-voltage FET presents an open circuit
+             // rDS ~ (-Vth*rDSon) / (Vgs-Vth)  //above Vth FET drain-source resistance is proportional to reciprocal of cutoff-control voltage
+             rDS_VCR_FET = cutoff[sidNum]<=VCR_FET_TRESHOLD ? 100000000.0 : cutoff_steepness_6581/(cutoff[sidNum]-VCR_FET_TRESHOLD);
+             cutoff[sidNum] = ( 1 - exp( cap_6581_reciprocal / (VCR_SHUNT_6581*rDS_VCR_FET/(VCR_SHUNT_6581+rDS_VCR_FET)) / INTERNAL_RATE ) ) * SCALE_CUTOFF; //curve with 1.5MOhm VCR parallel Rshunt emulation
+             resonance[sidNum] = ( (sReg[0x17] > 0x5F) ? 8.0 / (sReg[0x17] >> 4) : 1.41 ) * SCALE_RESO;
+            #else
+             cutoff[sidNum] = ( cutoff_bias_6581 + ( (cutoff[sidNum] < 192) ? 0 : 1 - exp((cutoff[sidNum]-192) * cutoff_ratio_6581) )  ) * SCALE_CUTOFF;
+             resonance[sidNum] = ( (sReg[0x17] > 0x5F) ? 8.0 / (sReg[0x17] >> 4) : 1.41 ) * SCALE_RESO;
+            #endif
+        }
+    #ifdef LIBCSID_FULL
+     }
+     //the filter-calculation itself can't be prescaled because sound-quality would suffer of no 'oversampling'
+    #endif
     filtout=0;
-    ftmp = filtin + prevbandpass[num] * resonance[num] / SCALE_RESO + prevlowpass[num];
+    ftmp = filtin + prevbandpass[sidNum] * resonance[sidNum] / SCALE_RESO + prevlowpass[sidNum];
     if (sReg[0x18] & HIGHPASS_BITMASK) filtout -= ftmp;
-    ftmp = prevbandpass[num] - ftmp * cutoff[num] / SCALE_CUTOFF;
-    prevbandpass[num] = ftmp;
+    ftmp = prevbandpass[sidNum] - ftmp * cutoff[sidNum] / SCALE_CUTOFF;
+    prevbandpass[sidNum] = ftmp;
     if (sReg[0x18] & BANDPASS_BITMASK) filtout -= ftmp;
-    ftmp = prevlowpass[num] + ftmp * cutoff[num] / SCALE_CUTOFF;
-    prevlowpass[num] = ftmp;
+    ftmp = prevlowpass[sidNum] + ftmp * cutoff[sidNum] / SCALE_CUTOFF;
+    prevlowpass[sidNum] = ftmp;
     if (sReg[0x18] & LOWPASS_BITMASK) filtout += ftmp;
     #undef SCALE_CUTOFF
     #undef SCALE_RESO
     
+    //output stage for one SID
     output = (nonfilt+filtout) * (sReg[0x18]&0xF) / OUTPUT_SCALEDOWN;
     //saturation logic on overload (not needed if the callback handles it)
     if (output>=32767) {
