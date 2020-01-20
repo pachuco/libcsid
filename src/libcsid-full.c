@@ -45,15 +45,29 @@
 
 int SID(char sidNum, unsigned int baseaddr) {
     //better keep these variables static so they won't slow down the routine like if they were internal automatic variables always recreated
-    static byte channel, ctrl, SR, prevgate, wf, test, filterctrl_prescaler[3]; 
+    static byte channel, ctrl, SR, prevgate, wf, test; 
     static byte *sReg, *vReg;
     static unsigned int accuadd, pw, wfout;
     static unsigned long int MSB;
-    static int step, nonfilt, filtin, cutoff[3], resonance[3]; //cutoff must be signed otherwise compiler may make errors in multiplications
-    static long int output, filtout, ftmp;              //so if samplerate is smaller, cutoff needs to be 'long int' as its value can exceed 32768
-    static unsigned int period;
-    static float rDS_VCR_FET;
-    #define INTERNAL_RATE CLOCK_CPU_PAL
+    //cutoff must be signed otherwise compiler may make errors in multiplications
+    //so if samplerate is smaller, cutoff needs to be 'long int' as its value can exceed 32768
+    static int step, cutoff[3], resonance[3];
+    static long int output, nonfilt, filtin, filtout;
+    #ifdef LIBCSID_FULL
+     #define INTERNAL_RATE CLOCK_CPU_PAL
+     #define INTERNAL_RATIO 1
+     static unsigned int period;
+     static long int ftmp;
+     static float rDS_VCR_FET;
+     static byte filterctrl_prescaler[3];
+    #else
+     #define INTERNAL_RATE samplerate
+     #define INTERNAL_RATIO clock_ratio
+     static float period;
+     static float ftmp;
+     static long int lim;
+     static float steep;
+    #endif
 
     filtin=nonfilt=0;
     sReg = &memory[baseaddr];
@@ -61,9 +75,7 @@ int SID(char sidNum, unsigned int baseaddr) {
 
     //treating 2SID and 3SID channels uniformly (0..5 / 0..8), this probably avoids some extra code
     for (channel = sidNum * SID_CHANNEL_AMOUNT ; channel < (sidNum + 1) * SID_CHANNEL_AMOUNT ; channel++, vReg += 7) {
-        #ifndef LIBCSID_FULL
         int trig = 0;
-        #endif
 
         //ADSR envelope generator:
         ctrl = vReg[4];
@@ -92,24 +104,31 @@ int SID(char sidNum, unsigned int baseaddr) {
         }
         period = ADSRperiods[step];
 
-        ratecnt[channel]++;
+        #ifdef LIBCSID_FULL
+         step = 1;
+        #else
+         prevSR[channel] = SR; //if(SR&0xF) ratecnt[channel]+=5;  //assume SR->GATE write order: workaround to have crisp soundstarts by triggering delay-bug
+         step = ADSRstep[step];
+        #endif
+
+        ratecnt[channel] += INTERNAL_RATIO;
         //ratecnt[channel] &= 0x7FFF;
         if (ratecnt[channel] >= 0x8000) ratecnt[channel] -= 0x8000; //can wrap around (ADSR delay-bug: short 1st frame)
-        if (ratecnt[channel] == period) { //ratecounter shot (matches rateperiod) (in genuine SID ratecounter is LFSR)
-            ratecnt[channel] = 0; //reset rate-counter on period-match
+        if (ratecnt[channel] >= period && ratecnt[channel] < period + INTERNAL_RATIO && trig == 0) { //ratecounter shot (matches rateperiod) (in genuine SID ratecounter is LFSR)
+            ratecnt[channel] -= period; //compensation for timing instead of simply setting 0 on rate-counter overload
             if ((ADSRstate[channel] & ATTACK_BITMASK) || ++expcnt[channel] == ADSR_exptable[envcnt[channel]]) {
                 expcnt[channel] = 0; 
                 if (!(ADSRstate[channel] & HOLDZERO_BITMASK)) {
                     if (ADSRstate[channel] & ATTACK_BITMASK) {
-                        envcnt[channel]++;
-                        if (envcnt[channel]>=0xFF) {
-                            envcnt[channel]=0xFF;
-                            ADSRstate[channel] &= 0xFF-ATTACK_BITMASK;
+                        envcnt[channel] += step;
+                        if (envcnt[channel] >= 0xFF) {
+                            envcnt[channel] = 0xFF;
+                            ADSRstate[channel] &= 0xFF - ATTACK_BITMASK;
                         }
-                    } else if ( !(ADSRstate[channel] & DECAYSUSTAIN_BITMASK) || envcnt[channel] != (SR & 0xF0) + (SR>>4)) {
-                        envcnt[channel]--; //resid adds 1 cycle delay, we omit that pipelining mechanism here
-                        if (envcnt[channel]<=0 && envcnt[channel]+1!=0) {
-                            envcnt[channel]=0;
+                    } else if ( !(ADSRstate[channel] & DECAYSUSTAIN_BITMASK) || envcnt[channel] > (SR & 0xF0) + (SR >> 4)) {
+                        envcnt[channel] -= step; //resid adds 1 cycle delay, we omit that pipelining mechanism here
+                        if (envcnt[channel] <= 0 && (envcnt[channel] + step) != 0) {
+                            envcnt[channel] = 0;
                             ADSRstate[channel] |= HOLDZERO_BITMASK;
                         }
                     }
@@ -120,11 +139,10 @@ int SID(char sidNum, unsigned int baseaddr) {
         }
 
 
-        
-        //WAVE generation codes (phase accumulator and waveform-selector):
+        //WAVE generation code (phase accumulator and waveform-selector):
         test = ctrl & TEST_BITMASK;
         wf = ctrl & 0xF0;
-        accuadd = (vReg[0] + vReg[1] * 256) * 1;
+        accuadd = (vReg[0] + vReg[1] * 256) * INTERNAL_RATIO;
         if (test || ((ctrl & SYNC_BITMASK) && sourceMSBrise[sidNum])) {
             phaseaccu[channel] = 0;
         } else {
@@ -136,7 +154,9 @@ int SID(char sidNum, unsigned int baseaddr) {
         sourceMSBrise[sidNum] = (MSB > (prevaccu[channel] & 0x800000)) ? 1 : 0;
         if (wf & NOISE_BITMASK) { //noise waveform
             int tmp = noise_LFSR[channel];
-            if (((phaseaccu[channel] & 0x100000) != (prevaccu[channel] & 0x100000))) {
+
+            //WARN: csid-full does not check for "|| accuadd >= 0x100000"
+            if (((phaseaccu[channel] & 0x100000) != (prevaccu[channel] & 0x100000)) || accuadd >= 0x100000) {
                 //clock LFSR all time if clockrate exceeds observable at given samplerate
                 tmp = ((tmp << 1) + (((tmp & 0x400000) ^ ((tmp & 0x20000) << 5)) ? 1 : test)) & 0x7FFFFF;
                 noise_LFSR[channel] = tmp;
@@ -180,7 +200,7 @@ int SID(char sidNum, unsigned int baseaddr) {
                  }
                 #endif
             } else { //combined pulse
-                wfout = (tmp >= pw || test) ? 0xFFFF : 0; 
+                wfout = (tmp >= pw || test) ? 0xFFFF : 0; //this aliases at high pitch when not oversampled
                 if (wf & TRI_BITMASK) {
                     if (wf & SAW_BITMASK) { //pulse+saw+triangle (waveform nearly identical to tri+saw)
                         wfout = wfout ? combinedWF(sidNum, channel, PulseTriSaw_8580, tmp >> 4, 1, vReg[1]) : 0;
@@ -188,14 +208,22 @@ int SID(char sidNum, unsigned int baseaddr) {
                         tmp = phaseaccu[channel] ^ (ctrl & RING_BITMASK ? sourceMSB[sidNum] : 0);
                         wfout = wfout ? combinedWF(sidNum, channel, PulseSaw_8580, (tmp ^ (tmp & 0x800000 ? 0xFFFFFF : 0)) >> 11, 0, vReg[1]) : 0;
                     }
-                } else if (wf & SAW_BITMASK) {
+                } else if (wf & SAW_BITMASK) { //pulse+saw
                     wfout = wfout ? combinedWF(sidNum, channel, PulseSaw_8580, tmp >> 4, 1, vReg[1]) : 0;
                 }
             }
-        } else if (wf & SAW_BITMASK) { //pulse+saw
-            wfout = phaseaccu[channel] >> 8; //saw
-            if (wf & TRI_BITMASK) wfout = combinedWF(sidNum, channel, TriSaw_8580, wfout >> 4, 1, vReg[1]); //saw+triangle
-        } else if (wf & TRI_BITMASK) {
+        } else if (wf & SAW_BITMASK) { //saw
+            wfout = phaseaccu[channel] >> 8; //this aliases at high pitch when not oversampled
+            if (wf & TRI_BITMASK) { //saw+triangle
+                wfout = combinedWF(sidNum, channel, TriSaw_8580, wfout >> 4, 1, vReg[1]);
+            } else { //bandlimited saw
+                #ifndef LIBCSID_FULL
+                 steep=(accuadd/65536.0)/288.0;
+                 wfout += wfout*steep;
+                 if(wfout>0xFFFF) wfout=0xFFFF-(wfout-0x10000)/steep; 
+                #endif
+            }
+        } else if (wf & TRI_BITMASK) { //triangle, doesn't need antialias so much
             int tmp = phaseaccu[channel] ^ (ctrl & RING_BITMASK ? sourceMSB[sidNum] : 0);
             wfout = (tmp ^ (tmp & 0x800000 ? 0xFFFFFF : 0)) >> 7;
         }
