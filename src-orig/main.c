@@ -8,7 +8,7 @@
 #include <conio.h>
 #include <windows.h>
 
-#include "libcsid-orig.h"
+#include "libcsid.h"
 #include "tinywinmm.h"
 
 int* loadfile(char* name, int* buflen) {
