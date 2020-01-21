@@ -12,12 +12,9 @@
 typedef struct CsidPlayer CsidPlayer;
 typedef unsigned char byte;
 
-extern void libcsid_init(CsidPlayer* self, int samplerate, int sidmodel);
+extern void libcsid_init(CsidPlayer* self, int samplerate);
 extern int libcsid_load(CsidPlayer* self, unsigned char *buffer, int bufferlen, int subtune);
-extern const char *libcsid_getauthor();
-extern const char *libcsid_getinfo();
-extern const char *libcsid_gettitle();
-extern const int   libcsid_getsubtunenum();
+extern const int   libcsid_getsubtunenum(CsidPlayer* self);
 
 extern void libcsid_render(CsidPlayer* self, signed short *stream, int numSamples);
 
@@ -51,11 +48,24 @@ struct CsidPlayer {
     short int envcnt[9];
     byte ADSRstate[9], expcnt[9], sourceMSBrise[9], prevSR[9];
     unsigned long int prevwfout[9], sourceMSB[3], noise_LFSR[9];
-    //cutoff must be signed otherwise compiler may make errors in multiplications
+    //the cutoff must be signed otherwise compiler may make errors in multiplications
     //so if samplerate is smaller, cutoff needs to be 'long int' as its value can exceed 32768
     //maybe Hermit wanted this code to work in 16bit DOS environment
     
+    //player-related variables:
+    int volScale; //compensation for main volume and also filter reso emphasis
+    int SIDamount, SID_model[3], sampleratio;
+    unsigned int initaddr, playaddr, playaddf, SID_address[3];
+    byte memory[MAX_DATA_LEN], timermode[0x20];
+    int curSubtune, subtuneAmount;
+    long int samplerate;
+    float CPUtime;
     
+    //CPU (and CIA/VIC-IRQ) emulation constants and variables
+    unsigned int PC, pPC, addr, storadd;
+    short int A, T, SP; 
+    byte X, Y, IR, ST;  //STATUS-flags: N V - B D I Z C
+    char cycles, finished, dynCIA;
 };
 
 #endif

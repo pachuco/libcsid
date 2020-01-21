@@ -46,19 +46,19 @@ int main(int argc, char *argv[]) {
     char* buf; int buflen;
     FILE *in;
     int subtune = 0; int subtune_total;
-    int prefmodel = -1;
+    //int prefmodel = -1;
     
     if (argc < 2) goto ERR;
     
     buf = loadfile(argv[1], &buflen);
     if (!buf) goto ERR;
     if (argc >= 3) subtune = atoi(argv[2]);
-    if (argc >= 4) prefmodel = atoi(argv[3]);
-    if (prefmodel != SIDMODEL_8580 && prefmodel != SIDMODEL_6581) prefmodel = -1;
-    libcsid_init(&cspl, SAMPRATE, prefmodel);
+    //if (argc >= 4) prefmodel = atoi(argv[3]);
+    //if (prefmodel != SIDMODEL_8580 && prefmodel != SIDMODEL_6581) prefmodel = -1;
+    libcsid_init(&cspl, SAMPRATE);
     libcsid_load(&cspl, buf, buflen, subtune);
     if (!openMixer(SAMPRATE, 16, 1, &renderTune)) goto ERR;
-    subtune_total = libcsid_getsubtunenum();
+    subtune_total = libcsid_getsubtunenum(&cspl);
     printf("Press ESC to stop.\n");
     
     while(1) {

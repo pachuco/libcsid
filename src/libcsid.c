@@ -10,22 +10,6 @@
 
 #include "libcsid.h"
 
-//player-related variables:
-int volScale; //compensation for main volume and also filter reso emphasis
-int SIDamount=1, SID_model[3]={8580,8580,8580}, requested_SID_model=-1, sampleratio;
-unsigned int initaddr, playaddr, playaddf, SID_address[3]={0xD400,0,0};
-byte memory[MAX_DATA_LEN], timermode[0x20], SIDtitle[0x20], SIDauthor[0x20], SIDinfo[0x20];
-int subtune=0, tunelength=-1;
-int subtune_amount = 0; 
-long int samplerate = DEFAULT_SAMPLERATE;
-
-//CPU (and CIA/VIC-IRQ) emulation constants and variables
-const byte flagsw[]={0x01,0x21,0x04,0x24,0x00,0x40,0x08,0x28}, branchflag[]={0x80,0x40,0x01,0x02};
-unsigned int PC=0, pPC=0, addr=0, storadd=0;
-short int A=0, T=0, SP=0xFF; 
-byte X=0, Y=0, IR=0, ST=0x00;  //STATUS-flags: N V - B D I Z C
-char cycles=0, finished=0, dynCIA=0;
-
  float cutoff_steepness_6581, cap_6581_reciprocal;
  float cutoff_ratio_8580, cutoff_ratio_6581, cutoff_bias_6581;
  
@@ -35,24 +19,22 @@ char cycles=0, finished=0, dynCIA=0;
  unsigned int ratecnt[9];
  unsigned long int phaseaccu[9], prevaccu[9];
  //player-related variables:
- int framecnt=0, frame_sampleperiod = DEFAULT_SAMPLERATE/PAL_FRAMERATE; 
- //CPU (and CIA/VIC-IRQ) emulation constants and variables - avoiding internal/automatic variables to retain speed
- float CPUtime=0.0;
+ int framecnt=0, frame_sampleperiod = DEFAULT_SAMPLERATE/PAL_FRAMERATE;
 #else
  //SID-emulation variables:
  unsigned long int prevwavdata[9];
  long int phaseaccu[9], prevaccu[9];
  float ratecnt[9];
  //player-related variables:
- float framecnt=0, frame_sampleperiod = DEFAULT_SAMPLERATE/PAL_FRAMERATE; 
- //CPU (and CIA/VIC-IRQ) emulation constants and variables - avoiding internal/automatic variables to retain speed
- float CPUtime=0.0;
+ float framecnt=0, frame_sampleperiod = DEFAULT_SAMPLERATE/PAL_FRAMERATE;
 #endif
 
+const byte flagsw[]={0x01,0x21,0x04,0x24,0x00,0x40,0x08,0x28}, branchflag[]={0x80,0x40,0x01,0x02};
 const byte FILTSW[9] = {1,2,4,1,2,4,1,2,4};
 unsigned int TriSaw_8580[4096], PulseSaw_8580[4096], PulseTriSaw_8580[4096];
 
-const byte ADSR_exptable[256] = {1, 30, 30, 30, 30, 30, 30, 16, 16, 16, 16, 16, 16, 16, 16, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 4, 4, 4, 4, 4, //pos0:1  pos6:30  pos14:16  pos26:8
+const byte ADSR_exptable[256] = {
+    1, 30, 30, 30, 30, 30, 30, 16, 16, 16, 16, 16, 16, 16, 16, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 4, 4, 4, 4, 4, //pos0:1  pos6:30  pos14:16  pos26:8
     4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, //pos54:4 //pos93:2
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
@@ -65,7 +47,7 @@ const byte ADSR_exptable[256] = {1, 30, 30, 30, 30, 30, 30, 16, 16, 16, 16, 16, 
  #define PERIOD0 CLOCK_RATIO_DEFAULT //max(round(clock_ratio),9)
  #define STEP0 3 //ceil(PERIOD0/9.0)
  float ADSRperiods[16] = {PERIOD0, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19532, 31251};
- byte ADSRstep[16] =   {  STEP0, 1,  1,  1,  1,    1,   1,   1,   1,   1,    1,    1,    1,     1,     1,     1};
+ byte ADSRstep[16] =     {STEP0,   1,  1,  1,  1,   1,   1,   1,   1,   1,   1,    1,    1,    1,     1,     1};
 #endif
 
 enum {
@@ -88,34 +70,38 @@ void createCombinedWF(unsigned int* wfarray, float bitmul, float bitstrength, fl
 
 //----------------------------- MAIN thread ----------------------------
 
-void init(CsidPlayer* self, byte subt) {
+void init(CsidPlayer* self, byte subtune) {
     long int timeout;
-    subtune = subt;
-    initCPU(self, initaddr);
+    self->curSubtune = subtune;
+    initCPU(self, self->initaddr);
     initSID(self);
-    A=subtune;
-    memory[1]=0x37;
-    memory[0xDC05]=0;
+    self->A=subtune;
+    self->memory[1]=0x37;
+    self->memory[0xDC05]=0;
     for(timeout=100000;timeout>=0;timeout--) if (CPU(self)) break; 
     
-    if (timermode[subtune] || memory[0xDC05]) { //&& playaddf {   //CIA timing
-        if (!memory[0xDC05]) {memory[0xDC04]=0x24; memory[0xDC05]=0x40;} //C64 startup-default
-        frame_sampleperiod = (memory[0xDC04]+memory[0xDC05]*256)/clock_ratio;
+    if (self->timermode[subtune] || self->memory[0xDC05]) { //&& self->playaddf {   //CIA timing
+        if (!self->memory[0xDC05]) { //C64 startup-default
+            self->memory[0xDC04]=0x24;
+            self->memory[0xDC05]=0x40;
+        }
+        frame_sampleperiod = (self->memory[0xDC04]+self->memory[0xDC05]*256)/clock_ratio;
     } else {
-        frame_sampleperiod = samplerate/PAL_FRAMERATE;  //Vsync timing
+        frame_sampleperiod = self->samplerate/PAL_FRAMERATE;  //Vsync timing
     }
     //frame_sampleperiod = (memory[0xDC05]!=0 || (!timermode[subtune] && playaddf))? samplerate/PAL_FRAMERATE : (memory[0xDC04] + memory[0xDC05]*256) / clock_ratio; 
-    if(playaddf==0) {
-        playaddr = ((memory[1]&3)<2)? memory[0xFFFE]+memory[0xFFFF]*256 : memory[0x314]+memory[0x315]*256;
-        printf("IRQ-playaddress:%4.4X\n",playaddr);
+    if(self->playaddf==0) {
+        self->playaddr = ((self->memory[1]&3)<2)? self->memory[0xFFFE]+self->memory[0xFFFF]*256 : self->memory[0x314]+self->memory[0x315]*256;
+        printf("IRQ-playaddress:%4.4X\n",self->playaddr);
     } else { //player under KERNAL (Crystal Kingdom Dizzy)
-        playaddr=playaddf;
-        if (playaddr>=0xE000 && memory[1]==0x37) memory[1]=0x35;
+        self->playaddr=self->playaddf;
+        if (self->playaddr>=0xE000 && self->memory[1]==0x37) self->memory[1]=0x35;
     }
-    initCPU(self, playaddr);
+    initCPU(self, self->playaddr);
     framecnt=1;
-    finished=0;
-    CPUtime=0; 
+    self->finished=0;
+    self->CPUtime=0;
+    self->dynCIA=0;
 }
 
 void libcsid_render(CsidPlayer* self, signed short *stream, int numSamples) { 
@@ -126,61 +112,61 @@ void libcsid_render(CsidPlayer* self, signed short *stream, int numSamples) {
         framecnt--;
         if (framecnt<=0) {
             framecnt=frame_sampleperiod;
-            finished=0;
-            PC=playaddr;
-            SP=0xFF;
+            self->finished=0;
+            self->PC=self->playaddr;
+            self->SP=0xFF;
         }
         // printf("%d  %f\n",framecnt,playtime); }
         
         #ifdef LIBCSID_FULL
-         for (j=0; j<sampleratio; j++) {
-             if (finished==0 && --cycles<=0) {
-                 pPC=PC;
+         for (j=0; j<self->sampleratio; j++) {
+             if (self->finished==0 && --self->cycles<=0) {
+                 self->pPC=self->PC;
                  //RTS,RTI and IRQ player ROM return handling
-                 if (CPU(self)>=0xFE || ( (memory[1]&3)>1 && pPC<0xE000 && (PC==0xEA31 || PC==0xEA81) ) ) {
-                     finished=1;
+                 if (CPU(self)>=0xFE || ( (self->memory[1]&3)>1 && self->pPC<0xE000 && (self->PC==0xEA31 || self->PC==0xEA81) ) ) {
+                     self->finished=1;
                  }
-                 if ( (addr==0xDC05 || addr==0xDC04) && (memory[1]&3) && timermode[subtune] ) {
-                     frame_sampleperiod = (memory[0xDC04] + memory[0xDC05]*256) / clock_ratio;  //dynamic CIA-setting (Galway/Rubicon workaround)
-                     dynCIA=1;
+                 if ( (self->addr==0xDC05 || self->addr==0xDC04) && (self->memory[1]&3) && self->timermode[self->curSubtune] ) {
+                     frame_sampleperiod = (self->memory[0xDC04] + self->memory[0xDC05]*256) / clock_ratio;  //dynamic CIA-setting (Galway/Rubicon workaround)
+                     self->dynCIA=1;
                  }
-                 if(storadd>=0xD420 && storadd<0xD800 && (memory[1]&3)) {  //CJ in the USA workaround (writing above $d420, except SID2/SID3)
-                     if ( !(SID_address[1]<=storadd && storadd<SID_address[1]+0x1F) && !(SID_address[2]<=storadd && storadd<SID_address[2]+0x1F) ) {
-                         memory[storadd&0xD41F]=memory[storadd]; //write to $D400..D41F if not in SID2/SID3 address-space
+                 if(self->storadd>=0xD420 && self->storadd<0xD800 && (self->memory[1]&3)) {  //CJ in the USA workaround (writing above $d420, except SID2/SID3)
+                     if ( !(self->SID_address[1]<=self->storadd && self->storadd<self->SID_address[1]+0x1F) && !(self->SID_address[2]<=self->storadd && self->storadd<self->SID_address[2]+0x1F) ) {
+                         self->memory[self->storadd&0xD41F]=self->memory[self->storadd]; //write to $D400..D41F if not in SID2/SID3 address-space
                      }
                  }
              }
-             for (k=0; k<SIDamount; k++) output += SID(self, k, SID_address[k]);
+             for (k=0; k<self->SIDamount; k++) output += SID(self, k, self->SID_address[k]);
          } 
-         output /= sampleratio;
+         output /= self->sampleratio;
         #else
-         if (finished==0) { 
-             while (CPUtime<=clock_ratio) {
-                 pPC=PC;
+         if (self->finished==0) { 
+             while (self->CPUtime<=clock_ratio) {
+                 self->pPC=self->PC;
                  //RTS,RTI and IRQ player ROM return handling
-                 if (CPU(self)>=0xFE || ( (memory[1]&3)>1 && pPC<0xE000 && (PC==0xEA31 || PC==0xEA81) ) ) {
-                     finished=1;
+                 if (CPU(self)>=0xFE || ( (self->memory[1]&3)>1 && self->pPC<0xE000 && (self->PC==0xEA31 || self->PC==0xEA81) ) ) {
+                     self->finished=1;
                      break;
                  } else {
-                     CPUtime+=cycles;
+                     self->CPUtime+=self->cycles;
                  }
-                 if ( (addr==0xDC05 || addr==0xDC04) && (memory[1]&3) && timermode[subtune] ) {
-                     frame_sampleperiod = (memory[0xDC04] + memory[0xDC05]*256) / clock_ratio;  //dynamic CIA-setting (Galway/Rubicon workaround)
-                     dynCIA=1;
+                 if ( (self->addr==0xDC05 || self->addr==0xDC04) && (self->memory[1]&3) && self->timermode[self->curSubtune] ) {
+                     frame_sampleperiod = (self->memory[0xDC04] + self->memory[0xDC05]*256) / clock_ratio;  //dynamic CIA-setting (Galway/Rubicon workaround)
+                     self->dynCIA=1;
                  }
-                 if(storadd>=0xD420 && storadd<0xD800 && (memory[1]&3)) {  //CJ in the USA workaround (writing above $d420, except SID2/SID3)
-                     if ( !(SID_address[1]<=storadd && storadd<SID_address[1]+0x1F) && !(SID_address[2]<=storadd && storadd<SID_address[2]+0x1F) ) {
-                         memory[storadd&0xD41F]=memory[storadd]; //write to $D400..D41F if not in SID2/SID3 address-space
+                 if(self->storadd>=0xD420 && self->storadd<0xD800 && (self->memory[1]&3)) {  //CJ in the USA workaround (writing above $d420, except SID2/SID3)
+                     if ( !(self->SID_address[1]<=self->storadd && self->storadd<self->SID_address[1]+0x1F) && !(self->SID_address[2]<=self->storadd && self->storadd<self->SID_address[2]+0x1F) ) {
+                         self->memory[self->storadd&0xD41F]=self->memory[self->storadd]; //write to $D400..D41F if not in SID2/SID3 address-space
                      }
                  }
                  //Whittaker player workarounds (if GATE-bit triggered too fast, 0 for some cycles then 1)
-                 if(addr==0xD404 && !(memory[0xD404]&GATE_BITMASK)) self->ADSRstate[0]&=0x3E;
-                 if(addr==0xD40B && !(memory[0xD40B]&GATE_BITMASK)) self->ADSRstate[1]&=0x3E;
-                 if(addr==0xD412 && !(memory[0xD412]&GATE_BITMASK)) self->ADSRstate[2]&=0x3E;
+                 if(self->addr==0xD404 && !(self->memory[0xD404]&GATE_BITMASK)) self->ADSRstate[0]&=0x3E;
+                 if(self->addr==0xD40B && !(self->memory[0xD40B]&GATE_BITMASK)) self->ADSRstate[1]&=0x3E;
+                 if(self->addr==0xD412 && !(self->memory[0xD412]&GATE_BITMASK)) self->ADSRstate[2]&=0x3E;
              }
-             CPUtime-=clock_ratio;
+             self->CPUtime-=clock_ratio;
          }
-         for (k=0; k<SIDamount; k++) output += SID(self, k, SID_address[k]);
+         for (k=0; k<self->SIDamount; k++) output += SID(self, k, self->SID_address[k]);
         #endif
         stream[i]=output; 
     }
@@ -192,7 +178,7 @@ void libcsid_render(CsidPlayer* self, signed short *stream, int numSamples) {
 //--------------------------------- CPU emulation -------------------------------------------
 
 void initCPU(CsidPlayer* self, unsigned int mempos) {
-    PC=mempos; A=0; X=0; Y=0; ST=0; SP=0xFF;
+    self->PC=mempos; self->A=0; self->X=0; self->Y=0; self->ST=0; self->SP=0xFF;
 } 
 
 //My CPU implementation is based on the instruction table by Graham at codebase64.
@@ -203,506 +189,507 @@ void initCPU(CsidPlayer* self, unsigned int mempos) {
 byte CPU (CsidPlayer* self) { //the CPU emulation for SID/PRG playback (ToDo: CIA/VIC-IRQ/NMI/RESET vectors, BCD-mode)
     //'IR' is the instruction-register, naming after the hardware-equivalent
     //'cycle': ensure smallest 6510 runtime (for implied/register instructions)
-    IR=memory[PC];
-    cycles=2;
-    storadd=0;
+    self->IR=self->memory[self->PC];
+    self->cycles=2;
+    self->storadd=0;
     
     //nybble2:  1/5/9/D:accu.instructions, 3/7/B/F:illegal opcodes
-    if(IR&1) {
-        switch (IR&0x1F) { //addressing modes (begin with more complex cases), PC wraparound not handled inside to save codespace
+    if(self->IR&1) {
+        switch (self->IR&0x1F) { //addressing modes (begin with more complex cases), PC wraparound not handled inside to save codespace
             case 0x01:
             case 0x03: //(zp,x)
-                addr  = memory[memory[++PC]+X];
-                addr += memory[memory[PC]+X+1]*256;
-                cycles=6;
+                self->addr  = self->memory[self->memory[++self->PC]+self->X];
+                self->addr += self->memory[self->memory[self->PC]+self->X+1]*256;
+                self->cycles=6;
                 break;
             case 0x11:
             case 0x13: //(zp),y (5..6 cycles, 8 for R-M-W)
-                addr  = memory[memory[++PC]];
-                addr += memory[memory[PC]+1]*256 + Y;
-                cycles=6;
+                self->addr  = self->memory[self->memory[++self->PC]];
+                self->addr += self->memory[self->memory[self->PC]+1]*256 + self->Y;
+                self->cycles=6;
                 break;
             case 0x19:
             case 0x1B: //abs,y //(4..5 cycles, 7 cycles for R-M-W)
-                addr  = memory[++PC];
-                addr += memory[++PC]*256 + Y;
-                cycles=5;
+                self->addr  = self->memory[++self->PC];
+                self->addr += self->memory[++self->PC]*256 + self->Y;
+                self->cycles=5;
                 break;
             case 0x1D: //abs,x //(4..5 cycles, 7 cycles for R-M-W)
-                addr  = memory[++PC];
-                addr += memory[++PC]*256 + X;
-                cycles=5;
+                self->addr  = self->memory[++self->PC];
+                self->addr += self->memory[++self->PC]*256 + self->X;
+                self->cycles=5;
                 break;
             case 0x0D:
             case 0x0F: //abs
-                addr  = memory[++PC];
-                addr += memory[++PC]*256;
-                cycles=4;
+                self->addr  = self->memory[++self->PC];
+                self->addr += self->memory[++self->PC]*256;
+                self->cycles=4;
                 break;
             case 0x15: //zp,x
-                addr = memory[++PC] + X;
-                cycles=4;
+                self->addr = self->memory[++self->PC] + self->X;
+                self->cycles=4;
                 break; 
             case 0x05:
             case 0x07: //zp
-                addr = memory[++PC];
-                cycles=3;
+                self->addr = self->memory[++self->PC];
+                self->cycles=3;
                 break; 
             case 0x17: 
-                if ((IR&0xC0)!=0x80) { //zp,x for illegal opcodes
-                    addr = memory[++PC] + X;
-                    cycles=4;
+                if ((self->IR&0xC0)!=0x80) { //zp,x for illegal opcodes
+                    self->addr = self->memory[++self->PC] + self->X;
+                    self->cycles=4;
                 } else { //zp,y for LAX/SAX illegal opcodes
-                    addr = memory[++PC] + Y;
-                    cycles=4;
+                    self->addr = self->memory[++self->PC] + self->Y;
+                    self->cycles=4;
                 }
                 break;
             case 0x1F:
-                if ((IR&0xC0)!=0x80) { //abs,x for illegal opcodes
-                    addr  = memory[++PC];
-                    addr += memory[++PC]*256 + X;
-                    cycles=5;
+                if ((self->IR&0xC0)!=0x80) { //abs,x for illegal opcodes
+                    self->addr  = self->memory[++self->PC];
+                    self->addr += self->memory[++self->PC]*256 + self->X;
+                    self->cycles=5;
                 } else { //abs,y for LAX/SAX illegal opcodes
-                    addr  = memory[++PC];
-                    addr += memory[++PC]*256 + Y;
-                    cycles=5;
+                    self->addr  = self->memory[++self->PC];
+                    self->addr += self->memory[++self->PC]*256 + self->Y;
+                    self->cycles=5;
                 }
                 break;
             case 0x09:
             case 0x0B: //immediate
-                addr = ++PC;
-                cycles=2;
+                self->addr = ++self->PC;
+                self->cycles=2;
         }
         
-        addr&=0xFFFF;
-        switch (IR&0xE0) {
+        self->addr&=0xFFFF;
+        switch (self->IR&0xE0) {
             case 0x60: 
-               if ((IR&0x1F)!=0xB) { //ADC / RRA (ROR+ADC)
-                    if((IR&3)==3) {
-                        T = (memory[addr]>>1)+(ST&1)*128;
-                        ST&=124;
-                        ST|=(T&1);
-                        memory[addr]=T;
-                        cycles+=2;
+               if ((self->IR&0x1F)!=0xB) { //ADC / RRA (ROR+ADC)
+                    if((self->IR&3)==3) {
+                        self->T = (self->memory[self->addr]>>1)+(self->ST&1)*128;
+                        self->ST&=124;
+                        self->ST|=(self->T&1);
+                        self->memory[self->addr]=self->T;
+                        self->cycles+=2;
                     }
-                    T=A;
-                    A+=memory[addr]+(ST&1);
-                    ST&=60;
-                    ST|=(A&128)|(A>255);
-                    A&=0xFF;
-                    ST |= (!A)<<1 | ( !((T^memory[addr])&0x80) & ((T^A)&0x80) ) >> 1;
-                } else { //V-flag set by intermediate ADC mechanism: (A&mem)+mem
-                    A&=memory[addr];
-                    T+=memory[addr]+(ST&1);
-                    ST&=60;
-                    ST |= (T>255) | ( !((A^memory[addr])&0x80) & ((T^A)&0x80) ) >> 1;
-                    T=A;
-                    A=(A>>1)+(ST&1)*128;
-                    ST|=(A&128)|(T>127);
-                    ST|=(!A)<<1;
+                    self->T=self->A;
+                    self->A+=self->memory[self->addr]+(self->ST&1);
+                    self->ST&=60;
+                    self->ST|=(self->A&128)|(self->A>255);
+                    self->A&=0xFF;
+                    self->ST |= (!self->A)<<1 | ( !((self->T^self->memory[self->addr])&0x80) & ((self->T^self->A)&0x80) ) >> 1;
+                } else { //V-flag set by intermediate ADC mechanism: (self->A&mem)+mem
+                    self->A&=self->memory[self->addr];
+                    self->T+=self->memory[self->addr]+(self->ST&1);
+                    self->ST&=60;
+                    self->ST |= (self->T>255) | ( !((self->A^self->memory[self->addr])&0x80) & ((self->T^self->A)&0x80) ) >> 1;
+                    self->T=self->A;
+                    self->A=(self->A>>1)+(self->ST&1)*128;
+                    self->ST|=(self->A&128)|(self->T>127);
+                    self->ST|=(!self->A)<<1;
                 }
                 // ARR (AND+ROR, bit0 not going to C, but C and bit7 get exchanged.)
                 break;
             case 0xE0: //SBC / ISC(ISB)=INC+SBC
-                if((IR&3)==3 && (IR&0x1F)!=0xB) {
-                    memory[addr]++;cycles+=2;
+                if((self->IR&3)==3 && (self->IR&0x1F)!=0xB) {
+                    self->memory[self->addr]++;
+                    self->cycles+=2;
                 }
-                T=A;
-                A-=memory[addr]+!(ST&1);
-                ST&=60;
-                ST|=(A&128)|(A>=0);
-                A&=0xFF;
-                ST |= (!A)<<1 | ( ((T^memory[addr])&0x80) & ((T^A)&0x80) ) >> 1;
+                self->T=self->A;
+                self->A-=self->memory[self->addr]+!(self->ST&1);
+                self->ST&=60;
+                self->ST|=(self->A&128)|(self->A>=0);
+                self->A&=0xFF;
+                self->ST |= (!self->A)<<1 | ( ((self->T^self->memory[self->addr])&0x80) & ((self->T^self->A)&0x80) ) >> 1;
                 break; 
             case 0xC0:
-                if((IR&0x1F)!=0xB) { // CMP / DCP(DEC+CMP)
-                    if ((IR&3)==3) {
-                        memory[addr]--;
-                        cycles+=2;
+                if((self->IR&0x1F)!=0xB) { // CMP / DCP(DEC+CMP)
+                    if ((self->IR&3)==3) {
+                        self->memory[self->addr]--;
+                        self->cycles+=2;
                     } 
-                    T=A-memory[addr];
+                    self->T=self->A-self->memory[self->addr];
                 } else { //SBX (AXS) (CMP+DEX at the same time)
-                    X=T=(A&X)-memory[addr];
+                    self->X=self->T=(self->A&self->X)-self->memory[self->addr];
                 }
-                ST&=124;
-                ST|=(!(T&0xFF))<<1|(T&128)|(T>=0);
+                self->ST&=124;
+                self->ST|=(!(self->T&0xFF))<<1|(self->T&128)|(self->T>=0);
                 break;
             case 0x00:
-                if ((IR&0x1F)!=0xB) { //ORA / SLO(ASO)=ASL+ORA
-                    if ((IR&3)==3) {
-                        ST&=124;
-                        ST|=(memory[addr]>127);
-                        memory[addr]<<=1;
-                        cycles+=2;
+                if ((self->IR&0x1F)!=0xB) { //ORA / SLO(ASO)=ASL+ORA
+                    if ((self->IR&3)==3) {
+                        self->ST&=124;
+                        self->ST|=(self->memory[self->addr]>127);
+                        self->memory[self->addr]<<=1;
+                        self->cycles+=2;
                     }  
-                    A|=memory[addr];
-                    ST&=125;
-                    ST|=(!A)<<1|(A&128);
+                    self->A|=self->memory[self->addr];
+                    self->ST&=125;
+                    self->ST|=(!self->A)<<1|(self->A&128);
                 } else { //ANC (AND+Carry=bit7)
-                    A&=memory[addr];
-                    ST&=124;
-                    ST|=(!A)<<1|(A&128)|(A>127);
+                    self->A&=self->memory[self->addr];
+                    self->ST&=124;
+                    self->ST|=(!self->A)<<1|(self->A&128)|(self->A>127);
                 }
                 break;
             case 0x20:
-                if ((IR&0x1F)!=0xB) { //AND / RLA (ROL+AND)
-                    if ((IR&3)==3) {
-                        T=(memory[addr]<<1)+(ST&1);
-                        ST&=124;
-                        ST|=(T>255);
-                        T&=0xFF;
-                        memory[addr]=T;
-                        cycles+=2;
+                if ((self->IR&0x1F)!=0xB) { //AND / RLA (ROL+AND)
+                    if ((self->IR&3)==3) {
+                        self->T=(self->memory[self->addr]<<1)+(self->ST&1);
+                        self->ST&=124;
+                        self->ST|=(self->T>255);
+                        self->T&=0xFF;
+                        self->memory[self->addr]=self->T;
+                        self->cycles+=2;
                     }  
-                    A&=memory[addr];
-                    ST&=125;
-                    ST|=(!A)<<1|(A&128); 
+                    self->A&=self->memory[self->addr];
+                    self->ST&=125;
+                    self->ST|=(!self->A)<<1|(self->A&128); 
                 } else { //ANC (AND+Carry=bit7)
-                    A&=memory[addr];
-                    ST&=124;
-                    ST|=(!A)<<1|(A&128)|(A>127);
+                    self->A&=self->memory[self->addr];
+                    self->ST&=124;
+                    self->ST|=(!self->A)<<1|(self->A&128)|(self->A>127);
                 }
                 break;
             case 0x40:
-                if ((IR&0x1F)!=0xB) { //EOR / SRE(LSE)=LSR+EOR
-                    if ((IR&3)==3) {
-                        ST&=124;
-                        ST|=(memory[addr]&1);
-                        memory[addr]>>=1;
-                        cycles+=2;
+                if ((self->IR&0x1F)!=0xB) { //EOR / SRE(LSE)=LSR+EOR
+                    if ((self->IR&3)==3) {
+                        self->ST&=124;
+                        self->ST|=(self->memory[self->addr]&1);
+                        self->memory[self->addr]>>=1;
+                        self->cycles+=2;
                     }
-                    A^=memory[addr];
-                    ST&=125;
-                    ST|=(!A)<<1|(A&128);
+                    self->A^=self->memory[self->addr];
+                    self->ST&=125;
+                    self->ST|=(!self->A)<<1|(self->A&128);
                 } else { //ALR(ASR)=(AND+LSR)
-                    A&=memory[addr];
-                    ST&=124;
-                    ST|=(A&1);
-                    A>>=1;
-                    A&=0xFF;
-                    ST|=(A&128)|((!A)<<1);
+                    self->A&=self->memory[self->addr];
+                    self->ST&=124;
+                    self->ST|=(self->A&1);
+                    self->A>>=1;
+                    self->A&=0xFF;
+                    self->ST|=(self->A&128)|((!self->A)<<1);
                 }
                 break;
             case 0xA0:
-                if ((IR&0x1F)!=0x1B) { //LDA / LAX (illegal, used by my 1 rasterline player)
-                        A=memory[addr];
-                        if ((IR&3)==3) X=A;
+                if ((self->IR&0x1F)!=0x1B) { //LDA / LAX (illegal, used by my 1 rasterline player)
+                        self->A=self->memory[self->addr];
+                        if ((self->IR&3)==3) self->X=self->A;
                     } else { // LAS (LAR)
-                        A=X=SP=memory[addr]&SP;
+                        self->A=self->X=self->SP=self->memory[self->addr]&self->SP;
                     }
-                    ST&=125;
-                    ST|=((!A)<<1) | (A&128);
+                    self->ST&=125;
+                    self->ST|=((!self->A)<<1) | (self->A&128);
                     break;
             case 0x80:
-                if ((IR&0x1F)==0xB) { //XAA (TXA+AND), highly unstable on real 6502!
-                    A = X & memory[addr];
-                    ST&=125;
-                    ST|=(A&128) | ((!A)<<1);
-                } else if ((IR&0x1F)==0x1B) { //TAS(SHS) (SP=A&X, mem=S&H} - unstable on real 6502
-                    SP=A&X;
-                    memory[addr]=SP&((addr>>8)+1);
+                if ((self->IR&0x1F)==0xB) { //XAA (TXA+AND), highly unstable on real 6502!
+                    self->A = self->X & self->memory[self->addr];
+                    self->ST&=125;
+                    self->ST|=(self->A&128) | ((!self->A)<<1);
+                } else if ((self->IR&0x1F)==0x1B) { //TAS(SHS) (SP=A&self->X, mem=S&H} - unstable on real 6502
+                    self->SP=self->A&self->X;
+                    self->memory[self->addr]=self->SP&((self->addr>>8)+1);
                 } else { //STA / SAX (at times same as AHX/SHX/SHY) (illegal) 
-                    memory[addr]=A & (((IR&3)==3)?X:0xFF);
-                    storadd=addr;
+                    self->memory[self->addr]=self->A & (((self->IR&3)==3)?self->X:0xFF);
+                    self->storadd=self->addr;
                 }
                 break;
         }
-    //nybble2:  2:illegal/LDX, 6:A/X/INC/DEC, A:Accu-shift/reg.transfer/NOP, E:shift/X/INC/DEC
-    } else if(IR&2) {
-        switch (IR&0x1F) { //addressing modes
+    //nybble2:  2:illegal/LDX, 6:A/self->X/INC/DEC, A:Accu-shift/reg.transfer/NOP, E:shift/self->X/INC/DEC
+    } else if(self->IR&2) {
+        switch (self->IR&0x1F) { //addressing modes
             case 0x1E: //abs,x / abs,y
-                addr  = memory[++PC];
-                addr += memory[++PC]*256 + ( ((IR&0xC0)!=0x80) ? X:Y );
-                cycles=5;
+                self->addr  = self->memory[++self->PC];
+                self->addr += self->memory[++self->PC]*256 + ( ((self->IR&0xC0)!=0x80) ? self->X:self->Y );
+                self->cycles=5;
                 break;
             case 0x0E: //abs
-                addr  = memory[++PC];
-                addr += memory[++PC]*256;
-                cycles=4;
+                self->addr  = self->memory[++self->PC];
+                self->addr += self->memory[++self->PC]*256;
+                self->cycles=4;
                 break;
             case 0x16: //zp,x / zp,y
-                addr = memory[++PC] + ( ((IR&0xC0)!=0x80) ? X:Y );
-                cycles=4;
+                self->addr = self->memory[++self->PC] + ( ((self->IR&0xC0)!=0x80) ? self->X:self->Y );
+                self->cycles=4;
                 break;
             case 0x06: //zp
-                addr = memory[++PC];
-                cycles=3;
+                self->addr = self->memory[++self->PC];
+                self->cycles=3;
                 break;
             case 0x02: //imm.
-                addr = ++PC;
-                cycles=2;
+                self->addr = ++self->PC;
+                self->cycles=2;
         }
         
-        addr&=0xFFFF; 
-        switch (IR&0xE0) {
+        self->addr&=0xFFFF; 
+        switch (self->IR&0xE0) {
             case 0x00:
-                ST&=0xFE;
+                self->ST&=0xFE;
             case 0x20:
-                if((IR&0xF)==0xA) { //ASL/ROL (Accu)
-                    A=(A<<1)+(ST&1);
-                    ST&=124;
-                    ST|=(A&128)|(A>255);
-                    A&=0xFF;
-                    ST|=(!A)<<1;
+                if((self->IR&0xF)==0xA) { //ASL/ROL (Accu)
+                    self->A=(self->A<<1)+(self->ST&1);
+                    self->ST&=124;
+                    self->ST|=(self->A&128)|(self->A>255);
+                    self->A&=0xFF;
+                    self->ST|=(!self->A)<<1;
                 } else { //RMW (Read-Write-Modify)
-                    T=(memory[addr]<<1)+(ST&1);
-                    ST&=124;
-                    ST|=(T&128)|(T>255);
-                    T&=0xFF;
-                    ST|=(!T)<<1;
-                    memory[addr]=T;
-                    cycles+=2;
+                    self->T=(self->memory[self->addr]<<1)+(self->ST&1);
+                    self->ST&=124;
+                    self->ST|=(self->T&128)|(self->T>255);
+                    self->T&=0xFF;
+                    self->ST|=(!self->T)<<1;
+                    self->memory[self->addr]=self->T;
+                    self->cycles+=2;
                 }
                 break;
             case 0x40:
-                ST&=0xFE;
+                self->ST&=0xFE;
             case 0x60:
-                if((IR&0xF)==0xA) { //LSR/ROR (Accu)
-                    T=A;
-                    A=(A>>1)+(ST&1)*128;
-                    ST&=124;
-                    ST|=(A&128)|(T&1);
-                    A&=0xFF;
-                    ST|=(!A)<<1;
-                } else { //memory (RMW)
-                    T=(memory[addr]>>1)+(ST&1)*128;
-                    ST&=124;
-                    ST|=(T&128)|(memory[addr]&1);
-                    T&=0xFF;
-                    ST|=(!T)<<1;
-                    memory[addr]=T;
-                    cycles+=2;
+                if((self->IR&0xF)==0xA) { //LSR/ROR (Accu)
+                    self->T=self->A;
+                    self->A=(self->A>>1)+(self->ST&1)*128;
+                    self->ST&=124;
+                    self->ST|=(self->A&128)|(self->T&1);
+                    self->A&=0xFF;
+                    self->ST|=(!self->A)<<1;
+                } else { //self->memory (RMW)
+                    self->T=(self->memory[self->addr]>>1)+(self->ST&1)*128;
+                    self->ST&=124;
+                    self->ST|=(self->T&128)|(self->memory[self->addr]&1);
+                    self->T&=0xFF;
+                    self->ST|=(!self->T)<<1;
+                    self->memory[self->addr]=self->T;
+                    self->cycles+=2;
                 }
                 break;
             case 0xC0:
-                if(IR&4) { //DEC
-                    memory[addr]--;
-                    ST&=125;
-                    ST|=(!memory[addr])<<1|(memory[addr]&128);
-                    cycles+=2;
+                if(self->IR&4) { //DEC
+                    self->memory[self->addr]--;
+                    self->ST&=125;
+                    self->ST|=(!self->memory[self->addr])<<1|(self->memory[self->addr]&128);
+                    self->cycles+=2;
                 } else { //DEX
-                    X--;
-                    X&=0xFF;
-                    ST&=125;
-                    ST|=(!X)<<1|(X&128);
+                    self->X--;
+                    self->X&=0xFF;
+                    self->ST&=125;
+                    self->ST|=(!self->X)<<1|(self->X&128);
                 }
                 break;
             case 0xA0: //LDX/TSX/TAX
-                if((IR&0xF)!=0xA) {
-                    X=memory[addr];
-                } else if(IR&0x10) {
-                    X=SP;
+                if((self->IR&0xF)!=0xA) {
+                    self->X=self->memory[self->addr];
+                } else if(self->IR&0x10) {
+                    self->X=self->SP;
                     break;
                 } else {
-                    X=A;
+                    self->X=self->A;
                 }
-                ST&=125;
-                ST|=(!X)<<1|(X&128);
+                self->ST&=125;
+                self->ST|=(!self->X)<<1|(self->X&128);
                 break;
             case 0x80: //STX/TXS/TXA
-                if(IR&4) {
-                    memory[addr]=X;
-                    storadd=addr;
-                } else if(IR&0x10) {
-                    SP=X;
+                if(self->IR&4) {
+                    self->memory[self->addr]=self->X;
+                    self->storadd=self->addr;
+                } else if(self->IR&0x10) {
+                    self->SP=self->X;
                 } else {
-                    A=X;
-                    ST&=125;
-                    ST|=(!A)<<1|(A&128);
+                    self->A=self->X;
+                    self->ST&=125;
+                    self->ST|=(!self->A)<<1|(self->A&128);
                 } 
                 break;
             case 0xE0: //INC/NOP
-                if(IR&4) {
-                    memory[addr]++;
-                    ST&=125;
-                    ST|=(!memory[addr])<<1|(memory[addr]&128);
-                    cycles+=2;
+                if(self->IR&4) {
+                    self->memory[self->addr]++;
+                    self->ST&=125;
+                    self->ST|=(!self->memory[self->addr])<<1|(self->memory[self->addr]&128);
+                    self->cycles+=2;
                 }
         }
     //nybble2:  8:register/status
-    } else if((IR&0xC)==8) {
-        switch (IR&0xF0) {
+    } else if((self->IR&0xC)==8) {
+        switch (self->IR&0xF0) {
             case 0x60: //PLA
-                SP++;
-                SP&=0xFF;
-                A=memory[0x100+SP];
-                ST&=125;
-                ST|=(!A)<<1|(A&128);
-                cycles=4;
+                self->SP++;
+                self->SP&=0xFF;
+                self->A=self->memory[0x100+self->SP];
+                self->ST&=125;
+                self->ST|=(!self->A)<<1|(self->A&128);
+                self->cycles=4;
                 break;
             case 0xC0: //INY
-                Y++;
-                Y&=0xFF;
-                ST&=125;
-                ST|=(!Y)<<1|(Y&128);
+                self->Y++;
+                self->Y&=0xFF;
+                self->ST&=125;
+                self->ST|=(!self->Y)<<1|(self->Y&128);
                 break;
             case 0xE0: //INX
-                X++;
-                X&=0xFF;
-                ST&=125;
-                ST|=(!X)<<1|(X&128);
+                self->X++;
+                self->X&=0xFF;
+                self->ST&=125;
+                self->ST|=(!self->X)<<1|(self->X&128);
                 break;
             case 0x80: //DEY
-                Y--;
-                Y&=0xFF;
-                ST&=125;
-                ST|=(!Y)<<1|(Y&128);
+                self->Y--;
+                self->Y&=0xFF;
+                self->ST&=125;
+                self->ST|=(!self->Y)<<1|(self->Y&128);
                 break;
             case 0x00: //PHP
-                memory[0x100+SP]=ST;
-                SP--;
-                SP&=0xFF;
-                cycles=3;
+                self->memory[0x100+self->SP]=self->ST;
+                self->SP--;
+                self->SP&=0xFF;
+                self->cycles=3;
                 break;
             case 0x20: //PLP
-                SP++;
-                SP&=0xFF;
-                ST=memory[0x100+SP];
-                cycles=4;
+                self->SP++;
+                self->SP&=0xFF;
+                self->ST=self->memory[0x100+self->SP];
+                self->cycles=4;
                 break;
             case 0x40:  //PHA
-                memory[0x100+SP]=A;
-                SP--;
-                SP&=0xFF;
-                cycles=3;
+                self->memory[0x100+self->SP]=self->A;
+                self->SP--;
+                self->SP&=0xFF;
+                self->cycles=3;
                 break;
             case 0x90:  //TYA
-                A=Y;
-                ST&=125;
-                ST|=(!A)<<1|(A&128);
+                self->A=self->Y;
+                self->ST&=125;
+                self->ST|=(!self->A)<<1|(self->A&128);
                 break;
             case 0xA0: //TAY
-                Y=A;
-                ST&=125;
-                ST|=(!Y)<<1|(Y&128);
+                self->Y=self->A;
+                self->ST&=125;
+                self->ST|=(!self->Y)<<1|(self->Y&128);
                 break;
             default: //CLC/SEC/CLI/SEI/CLV/CLD/SED
-                if(flagsw[IR>>5]&0x20) {
-                    ST|=(flagsw[IR>>5]&0xDF);
+                if(flagsw[self->IR>>5]&0x20) {
+                    self->ST|=(flagsw[self->IR>>5]&0xDF);
                 } else {
-                    ST&=255-(flagsw[IR>>5]&0xDF);
+                    self->ST&=255-(flagsw[self->IR>>5]&0xDF);
                 }
         }
     //nybble2:  0: control/branch/Y/compare  4: Y/compare  C:Y/compare/JMP
     } else {
-        if ((IR&0x1F)==0x10) { //BPL/BMI/BVC/BVS/BCC/BCS/BNE/BEQ  relative branch 
-            PC++; T=memory[PC];
-            if(T&0x80) T-=0x100;
-            if(IR&0x20) {
-                if (ST&branchflag[IR>>6]) {
-                    PC+=T;
-                    cycles=3;
+        if ((self->IR&0x1F)==0x10) { //BPL/BMI/BVC/BVS/BCC/BCS/BNE/BEQ  relative branch 
+            self->PC++; self->T=self->memory[self->PC];
+            if(self->T&0x80) self->T-=0x100;
+            if(self->IR&0x20) {
+                if (self->ST&branchflag[self->IR>>6]) {
+                    self->PC+=self->T;
+                    self->cycles=3;
                 }
             } else {
-                if (!(ST&branchflag[IR>>6])) {
-                    PC+=T;
-                    cycles=3;
+                if (!(self->ST&branchflag[self->IR>>6])) {
+                    self->PC+=self->T;
+                    self->cycles=3;
                 }
             }
         } else {  //nybble2:  0:Y/control/Y/compare  4:Y/compare  C:Y/compare/JMP
-            switch (IR&0x1F) { //addressing modes
+            switch (self->IR&0x1F) { //addressing modes
                 case 0x00: //imm. (or abs.low for JSR/BRK)
-                    addr = ++PC;
-                    cycles=2;
+                    self->addr = ++self->PC;
+                    self->cycles=2;
                     break;
                 case 0x1C: //abs,x
-                    addr  = memory[++PC];
-                    addr += memory[++PC]*256 + X;
-                    cycles=5;
+                    self->addr  = self->memory[++self->PC];
+                    self->addr += self->memory[++self->PC]*256 + self->X;
+                    self->cycles=5;
                     break;
                 case 0x0C: //abs
-                    addr  = memory[++PC];
-                    addr += memory[++PC]*256;
-                    cycles=4;
+                    self->addr  = self->memory[++self->PC];
+                    self->addr += self->memory[++self->PC]*256;
+                    self->cycles=4;
                     break;
                 case 0x14: //zp,x
-                    addr = memory[++PC] + X;
-                    cycles=4;
+                    self->addr = self->memory[++self->PC] + self->X;
+                    self->cycles=4;
                     break;
                 case 0x04: //zp
-                    addr = memory[++PC];
-                    cycles=3;
+                    self->addr = self->memory[++self->PC];
+                    self->cycles=3;
             }
             
-            addr&=0xFFFF;  
-            switch (IR&0xE0) {
+            self->addr&=0xFFFF;  
+            switch (self->IR&0xE0) {
             case 0x00: //BRK
-                memory[0x100+SP]=PC%256;
-                SP--;
-                SP&=0xFF;
-                memory[0x100+SP]=PC/256;
-                SP--;
-                SP&=0xFF;
-                memory[0x100+SP]=ST;
-                SP--;SP&=0xFF; 
-                PC = memory[0xFFFE]+memory[0xFFFF]*256-1;
-                cycles=7;
+                self->memory[0x100+self->SP]=self->PC%256;
+                self->SP--;
+                self->SP&=0xFF;
+                self->memory[0x100+self->SP]=self->PC/256;
+                self->SP--;
+                self->SP&=0xFF;
+                self->memory[0x100+self->SP]=self->ST;
+                self->SP--;self->SP&=0xFF; 
+                self->PC = self->memory[0xFFFE]+self->memory[0xFFFF]*256-1;
+                self->cycles=7;
                 break;
             case 0x20:
-                if(IR&0xF) { //BIT
-                    ST &= 0x3D;
-                    ST |= (memory[addr]&0xC0) | ( !(A&memory[addr]) )<<1;
+                if(self->IR&0xF) { //BIT
+                    self->ST &= 0x3D;
+                    self->ST |= (self->memory[self->addr]&0xC0) | ( !(self->A&self->memory[self->addr]) )<<1;
                 } else { //JSR
-                    memory[0x100+SP]=(PC+2)%256;
-                    SP--;
-                    SP&=0xFF;
-                    memory[0x100+SP]=(PC+2)/256;
-                    SP--;SP&=0xFF;
-                    PC=memory[addr]+memory[addr+1]*256-1;
-                    cycles=6;
+                    self->memory[0x100+self->SP]=(self->PC+2)%256;
+                    self->SP--;
+                    self->SP&=0xFF;
+                    self->memory[0x100+self->SP]=(self->PC+2)/256;
+                    self->SP--;self->SP&=0xFF;
+                    self->PC=self->memory[self->addr]+self->memory[self->addr+1]*256-1;
+                    self->cycles=6;
                 }
                 break;
             case 0x40:
-                if(IR&0xF) { //JMP
-                    PC = addr-1;
-                    cycles=3;
+                if(self->IR&0xF) { //JMP
+                    self->PC = self->addr-1;
+                    self->cycles=3;
                 } else { //RTI
-                    if(SP>=0xFF) return 0xFE;
-                    SP++;
-                    SP&=0xFF;
-                    ST=memory[0x100+SP];
-                    SP++;
-                    SP&=0xFF;
-                    T=memory[0x100+SP];
-                    SP++;
-                    SP&=0xFF;
-                    PC=memory[0x100+SP]+T*256-1;
-                    cycles=6;
+                    if(self->SP>=0xFF) return 0xFE;
+                    self->SP++;
+                    self->SP&=0xFF;
+                    self->ST=self->memory[0x100+self->SP];
+                    self->SP++;
+                    self->SP&=0xFF;
+                    self->T=self->memory[0x100+self->SP];
+                    self->SP++;
+                    self->SP&=0xFF;
+                    self->PC=self->memory[0x100+self->SP]+self->T*256-1;
+                    self->cycles=6;
                 }
                 break;
             case 0x60:
-                if(IR&0xF) { //JMP() (indirect)
-                    PC = memory[addr]+memory[addr+1]*256-1;
-                    cycles=5;
+                if(self->IR&0xF) { //JMP() (indirect)
+                    self->PC = self->memory[self->addr]+self->memory[self->addr+1]*256-1;
+                    self->cycles=5;
                 } else { //RTS
-                    if(SP>=0xFF) return 0xFF;
-                    SP++;
-                    SP&=0xFF;
-                    T=memory[0x100+SP];
-                    SP++;
-                    SP&=0xFF;
-                    PC=memory[0x100+SP]+T*256-1;
-                    cycles=6;
+                    if(self->SP>=0xFF) return 0xFF;
+                    self->SP++;
+                    self->SP&=0xFF;
+                    self->T=self->memory[0x100+self->SP];
+                    self->SP++;
+                    self->SP&=0xFF;
+                    self->PC=self->memory[0x100+self->SP]+self->T*256-1;
+                    self->cycles=6;
                 }
                 break;
             case 0xC0: //CPY
-                T=Y-memory[addr];
-                ST&=124;
-                ST|=(!(T&0xFF))<<1|(T&128)|(T>=0);
+                self->T=self->Y-self->memory[self->addr];
+                self->ST&=124;
+                self->ST|=(!(self->T&0xFF))<<1|(self->T&128)|(self->T>=0);
                 break;
             case 0xE0: //CPX
-                T=X-memory[addr];
-                ST&=124;
-                ST|=(!(T&0xFF))<<1|(T&128)|(T>=0);
+                self->T=self->X-self->memory[self->addr];
+                self->ST&=124;
+                self->ST|=(!(self->T&0xFF))<<1|(self->T&128)|(self->T>=0);
                 break;
             case 0xA0: //LDY
-                Y=memory[addr];
-                ST&=125;
-                ST|=(!Y)<<1|(Y&128);
+                self->Y=self->memory[self->addr];
+                self->ST&=125;
+                self->ST|=(!self->Y)<<1|(self->Y&128);
                 break;
             case 0x80: //STY
-                memory[addr]=Y;
-                storadd=addr;
+                self->memory[self->addr]=self->Y;
+                self->storadd=self->addr;
             }
         }
     }
@@ -710,7 +697,7 @@ byte CPU (CsidPlayer* self) { //the CPU emulation for SID/PRG playback (ToDo: CI
     //if(IR==0xCB) //test SBX
     // printf("PC:%4.4X IR:%2.2X, addr: %4.4X,%2.2X,  storadd: %4.4X,%2.2X,  A:%2.2X, X:%2.2X, Y:%2.2X ST:%2.2X\n",PC,IR,addr,memory[addr],storadd,memory[storadd],A,X,Y,ST);  
     
-    PC++; //PC&=0xFFFF; 
+    self->PC++; //PC&=0xFFFF; 
     return 0; 
 }
 
@@ -720,8 +707,8 @@ byte CPU (CsidPlayer* self) { //the CPU emulation for SID/PRG playback (ToDo: CI
 //           21:cutoffl 22:cutoffh 23:flsw_reso 24:vol_ftype 25:potX 26:potY 27:OSC3 28:ENV3
 void initSID(CsidPlayer* self) { 
     int i;
-    for(i=0xD400;i<=0xD7FF;i++) memory[i]=0;
-    for(i=0xDE00;i<=0xDFFF;i++) memory[i]=0;
+    for(i=0xD400;i<=0xD7FF;i++) self->memory[i]=0;
+    for(i=0xDE00;i<=0xDFFF;i++) self->memory[i]=0;
     for(i=0;i<9;i++) {
         self->ADSRstate[i]=HOLDZERO_BITMASK;
         ratecnt[i] = 0;
@@ -841,14 +828,14 @@ int SID(CsidPlayer* self, char sidNum, unsigned int baseaddr) {
      #define INTERNAL_RATIO 1
      unsigned int period;
     #else
-     #define INTERNAL_RATE samplerate
+     #define INTERNAL_RATE self->samplerate
      #define INTERNAL_RATIO clock_ratio
      float period;
      float ftmp;
     #endif
 
     filtin=nonfilt=0;
-    sReg = &memory[baseaddr];
+    sReg = &self->memory[baseaddr];
     vReg = sReg;
 
     //treating 2SID and 3SID channels uniformly (0..5 / 0..8), this probably avoids some extra code
@@ -1023,7 +1010,7 @@ int SID(CsidPlayer* self, char sidNum, unsigned int baseaddr) {
         }
     }
     //update readable SID1-registers (some SID tunes might use 3rd channel ENV3/OSC3 value as control)
-    if(sidNum==0 && memory[1]&3) { //OSC3, ENV3 (some players rely on it) 
+    if(sidNum==0 && self->memory[1]&3) { //OSC3, ENV3 (some players rely on it) 
         sReg[0x1B]=wfout>>8;
         sReg[0x1C]=self->envcnt[3];
     }
@@ -1038,7 +1025,7 @@ int SID(CsidPlayer* self, char sidNum, unsigned int baseaddr) {
          self->filterctrl_prescaler[sidNum]=clock_ratio;
     #endif
         self->cutoff[sidNum] = 2 + sReg[0x16] * 8 + (sReg[0x15] & 7); //WARN: csid-light does not "2 +", why?
-        if (SID_model[sidNum] == 8580) {
+        if (self->SID_model[sidNum] == SIDMODEL_8580) {
             self->resonance[sidNum] = ( pow(2, ((4 - (sReg[0x17] >> 4)) / 8.0)) ) * SCALE_RESO;
             self->cutoff[sidNum] = ( 1 - exp((self->cutoff[sidNum]+2) * cutoff_ratio_8580) ) * SCALE_CUTOFF; //linear curve by resistor-ladder VCR
         } else { //6581
@@ -1069,7 +1056,7 @@ int SID(CsidPlayer* self, char sidNum, unsigned int baseaddr) {
     if (sReg[0x18] & LOWPASS_BITMASK) filtout += ftmp;
     
     //output stage for one SID
-    output = (nonfilt+filtout) * (sReg[0x18]&0xF) / volScale;
+    output = (nonfilt+filtout) * (sReg[0x18]&0xF) / self->volScale;
     //saturation logic on overload (not needed if the callback handles it)
     if (output>=32767) {
         output=32767;
@@ -1126,7 +1113,7 @@ int SID(CsidPlayer* self, char sidNum, unsigned int baseaddr) {
 //in case you don't like these calculated combined waveforms it's easy to substitute the generated tables by pre-sampled 'exact' versions
 
 unsigned int combinedWF(CsidPlayer* self, char num, char channel, unsigned int* wfarray, int index, char differ6581, byte freqh) {
-    if(differ6581 && SID_model[num]==6581) index &= 0x7FF;
+    if(differ6581 && self->SID_model[num]==SIDMODEL_6581) index &= 0x7FF;
     #ifdef LIBCSID_FULL
      return wfarray[index];
     #else
@@ -1167,33 +1154,20 @@ void createCombinedWF(unsigned int* wfarray, float bitmul, float bitstrength, fl
 // libcsid exported api
 //
 
-const char *libcsid_getauthor() {
-    return (char *)&SIDauthor;
+const int libcsid_getsubtunenum(CsidPlayer* self) {
+    return self->subtuneAmount;
 }
 
-const char *libcsid_getinfo() {
-    return (char *)&SIDinfo;
+void libcsid_init(CsidPlayer* self, int samplerate) {
+    self->samplerate  = samplerate;
+    self->sampleratio = round(CLOCK_CPU_PAL / samplerate);
 }
 
-const char *libcsid_gettitle() {
-    return (char *)&SIDtitle;
-}
-
-const int libcsid_getsubtunenum() {
-    return subtune_amount;
-}
-
-void libcsid_init(CsidPlayer* self, int _samplerate, int _sidmodel) {
-    samplerate = _samplerate;
-    sampleratio = round(CLOCK_CPU_PAL / samplerate);
-    requested_SID_model = _sidmodel;
-}
-
-int libcsid_load(CsidPlayer* self, unsigned char *_buffer, int _bufferlen, int _subtune) {
-    int readata, strend, preferred_SID_model[3] = {8580, 8580, 8580};
+int libcsid_load(CsidPlayer* self, unsigned char *_buffer, int _bufferlen, int subtune) {
+    int readata, preferred_SID_model[3] = {SIDMODEL_8580, SIDMODEL_8580, SIDMODEL_8580};
     unsigned int i, datalen, offs, loadaddr;
     
-    subtune = _subtune;
+    self->curSubtune = subtune;
     
     unsigned char *filedata = _buffer;
     datalen = _bufferlen;
@@ -1203,80 +1177,48 @@ int libcsid_load(CsidPlayer* self, unsigned char *_buffer, int _bufferlen, int _
     printf("\nOffset: $%4.4X, Loadaddress: $%4.4X \nTimermodes:", offs, loadaddr);
     
     for (i = 0; i < 32; i++) {
-        timermode[31 - i] = (filedata[0x12 + (i >> 3)] & (byte)pow(2, 7 - i % 8)) ? 1 : 0;
-        printf(" %1d",timermode[31 - i]);
+        self->timermode[31 - i] = (filedata[0x12 + (i >> 3)] & (byte)pow(2, 7 - i % 8)) ? 1 : 0;
+        printf(" %1d",self->timermode[31 - i]);
     }
     
     for (i = 0; i < MAX_DATA_LEN; i++) {
-        memory[i] = 0;
+        self->memory[i] = 0;
     }
     
     for (i = offs + 2; i < datalen; i++) {
         if (loadaddr + i - (offs + 2) < MAX_DATA_LEN) {
-            memory[loadaddr + i - (offs + 2)] = filedata[i];
+            self->memory[loadaddr + i - (offs + 2)] = filedata[i];
         }
     }
     
-    strend = 1;
-    for (i = 0; i < 32; i++) {
-        if (strend != 0) {
-            strend = SIDtitle[i] = filedata[0x16 + i];
-        } else {
-            strend = SIDtitle[i] = 0;
-        }
+    self->initaddr=filedata[0xA]+filedata[0xB]? filedata[0xA]*256+filedata[0xB] : loadaddr;
+    self->playaddr=self->playaddf=filedata[0xC]*256+filedata[0xD];
+    printf("\nInit:$%4.4X,Play:$%4.4X, ", self->initaddr, self->playaddr);
+    self->subtuneAmount=filedata[0xF];
+    preferred_SID_model[0] = (filedata[0x77]&0x30)>=0x20? SIDMODEL_8580 : SIDMODEL_6581;
+    printf("Subtunes:%d , preferred SID-model:%d\n", self->subtuneAmount, preferred_SID_model[0]);
+    preferred_SID_model[1] = (filedata[0x77]&0xC0)>=0x80 ? SIDMODEL_8580 : SIDMODEL_6581;
+    preferred_SID_model[2] = (filedata[0x76]&3)>=3 ? SIDMODEL_8580 : SIDMODEL_6581; 
+    self->SID_address[0] = 0xD400;
+    self->SID_address[1] = filedata[0x7A]>=0x42 && (filedata[0x7A]<0x80 || filedata[0x7A]>=0xE0) ? 0xD000+filedata[0x7A]*16 : 0;
+    self->SID_address[2] = filedata[0x7B]>=0x42 && (filedata[0x7B]<0x80 || filedata[0x7B]>=0xE0) ? 0xD000+filedata[0x7B]*16 : 0;
+    
+    self->SIDamount=1+(self->SID_address[1]>0)+(self->SID_address[2]>0);
+    if(self->SIDamount>=2) printf("(SID1), %d(SID2:%4.4X)",preferred_SID_model[1],self->SID_address[1]); 
+    if(self->SIDamount==3) printf(", %d(SID3:%4.4X)",preferred_SID_model[2],self->SID_address[2]);
+    
+    for (i=0;i<self->SIDamount;i++) {
+        self->SID_model[i] = preferred_SID_model[i];
     }
     
-    strend = 1;
-    for (i = 0; i < 32; i++) {
-        if (strend != 0) {
-            strend = SIDauthor[i] = filedata[0x36 + i];
-        } else {
-            strend = SIDauthor[i] = 0;
-        }
+    self->volScale = (SID_CHANNEL_AMOUNT * 16 + 26);
+    if (self->SIDamount == 2) {
+      self->volScale /= 0.6;
+    } else if (self->SIDamount >= 3) {
+      self->volScale /= 0.4;
     }
     
-    strend = 1;
-    for (i = 0; i < 32; i++) {
-        if (strend != 0) {
-            strend = SIDinfo[i] = filedata[0x56 + i];
-        } else {
-            strend = SIDinfo[i] = 0;
-        }
-    }
-    
-    printf("\nTitle: %s    ",SIDtitle);
-    printf("Author: %s    ",SIDauthor);
-    printf("Info: %s",SIDinfo);
-    
-    initaddr=filedata[0xA]+filedata[0xB]? filedata[0xA]*256+filedata[0xB] : loadaddr; playaddr=playaddf=filedata[0xC]*256+filedata[0xD]; printf("\nInit:$%4.4X,Play:$%4.4X, ",initaddr,playaddr);
-    subtune_amount=filedata[0xF];
-    preferred_SID_model[0] = (filedata[0x77]&0x30)>=0x20? 8580 : 6581;
-    printf("Subtunes:%d , preferred SID-model:%d", subtune_amount, preferred_SID_model[0]);
-    preferred_SID_model[1] = (filedata[0x77]&0xC0)>=0x80 ? 8580 : 6581;
-    preferred_SID_model[2] = (filedata[0x76]&3)>=3 ? 8580 : 6581; 
-    SID_address[1] = filedata[0x7A]>=0x42 && (filedata[0x7A]<0x80 || filedata[0x7A]>=0xE0) ? 0xD000+filedata[0x7A]*16 : 0;
-    SID_address[2] = filedata[0x7B]>=0x42 && (filedata[0x7B]<0x80 || filedata[0x7B]>=0xE0) ? 0xD000+filedata[0x7B]*16 : 0;
-    
-    SIDamount=1+(SID_address[1]>0)+(SID_address[2]>0); if(SIDamount>=2) printf("(SID1), %d(SID2:%4.4X)",preferred_SID_model[1],SID_address[1]); 
-    if(SIDamount==3) printf(", %d(SID3:%4.4X)",preferred_SID_model[2],SID_address[2]);
-    if (requested_SID_model!=-1) printf(" (requested:%d)",requested_SID_model); printf("\n");
-    
-    for (i=0;i<SIDamount;i++) {
-        if (requested_SID_model==8580 || requested_SID_model==6581) {
-            SID_model[i] = requested_SID_model;
-        } else {
-            SID_model[i] = preferred_SID_model[i];
-        }
-    }
-    
-    volScale = (SID_CHANNEL_AMOUNT * 16 + 26);
-    if (SIDamount == 2) {
-      volScale /= 0.6;
-    } else if (SIDamount >= 3) {
-      volScale /= 0.4;
-    }
-    
-    cSID_init(self, samplerate);
+    cSID_init(self, self->samplerate);
     init(self, subtune);
     
     return 0;
