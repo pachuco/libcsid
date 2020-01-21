@@ -51,6 +51,8 @@ struct CsidPlayer {
     //the cutoff must be signed otherwise compiler may make errors in multiplications
     //so if samplerate is smaller, cutoff needs to be 'long int' as its value can exceed 32768
     //maybe Hermit wanted this code to work in 16bit DOS environment
+    float clock_ratio;
+    float cutoff_ratio_8580, cutoff_ratio_6581, cutoff_bias_6581;
     
     //player-related variables:
     int volScale; //compensation for main volume and also filter reso emphasis
@@ -66,6 +68,23 @@ struct CsidPlayer {
     short int A, T, SP; 
     byte X, Y, IR, ST;  //STATUS-flags: N V - B D I Z C
     char cycles, finished, dynCIA;
+    
+    #ifdef LIBCSID_FULL
+     //SID-emulation variables:
+     unsigned int ratecnt[9];
+     unsigned long int phaseaccu[9], prevaccu[9];
+     //player-related variables:
+     int framecnt, frame_sampleperiod;
+    #else
+     //SID-emulation variables:
+     unsigned long int prevwavdata[9];
+     long int phaseaccu[9], prevaccu[9];
+     float ratecnt[9];
+     float period0;
+     byte  step0;
+     //player-related variables:
+     float framecnt, frame_sampleperiod;
+    #endif
 };
 
 #endif

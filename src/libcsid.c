@@ -10,28 +10,11 @@
 
 #include "libcsid.h"
 
- float cutoff_steepness_6581, cap_6581_reciprocal;
- float cutoff_ratio_8580, cutoff_ratio_6581, cutoff_bias_6581;
- 
- float clock_ratio=CLOCK_RATIO_DEFAULT;
-#ifdef LIBCSID_FULL
- //SID-emulation variables:
- unsigned int ratecnt[9];
- unsigned long int phaseaccu[9], prevaccu[9];
- //player-related variables:
- int framecnt=0, frame_sampleperiod = DEFAULT_SAMPLERATE/PAL_FRAMERATE;
-#else
- //SID-emulation variables:
- unsigned long int prevwavdata[9];
- long int phaseaccu[9], prevaccu[9];
- float ratecnt[9];
- //player-related variables:
- float framecnt=0, frame_sampleperiod = DEFAULT_SAMPLERATE/PAL_FRAMERATE;
-#endif
+float cutoff_steepness_6581, cap_6581_reciprocal;
+unsigned int TriSaw_8580[4096], PulseSaw_8580[4096], PulseTriSaw_8580[4096];
 
 const byte flagsw[]={0x01,0x21,0x04,0x24,0x00,0x40,0x08,0x28}, branchflag[]={0x80,0x40,0x01,0x02};
 const byte FILTSW[9] = {1,2,4,1,2,4,1,2,4};
-unsigned int TriSaw_8580[4096], PulseSaw_8580[4096], PulseTriSaw_8580[4096];
 
 const byte ADSR_exptable[256] = {
     1, 30, 30, 30, 30, 30, 30, 16, 16, 16, 16, 16, 16, 16, 16, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 4, 4, 4, 4, 4, //pos0:1  pos6:30  pos14:16  pos26:8
@@ -41,14 +24,7 @@ const byte ADSR_exptable[256] = {
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
 };
 
-#ifdef LIBCSID_FULL
- int ADSRperiods[16] = {9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19532, 31251};
-#else
- #define PERIOD0 CLOCK_RATIO_DEFAULT //max(round(clock_ratio),9)
- #define STEP0 3 //ceil(PERIOD0/9.0)
- float ADSRperiods[16] = {PERIOD0, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19532, 31251};
- byte ADSRstep[16] =     {STEP0,   1,  1,  1,  1,   1,   1,   1,   1,   1,   1,    1,    1,    1,     1,     1};
-#endif
+const int ADSRperiods[16] = {9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19532, 31251};
 
 enum {
     GATE_BITMASK=0x01,     SYNC_BITMASK=0x02,         RING_BITMASK=0x04,     TEST_BITMASK=0x08,
@@ -85,9 +61,9 @@ void init(CsidPlayer* self, byte subtune) {
             self->memory[0xDC04]=0x24;
             self->memory[0xDC05]=0x40;
         }
-        frame_sampleperiod = (self->memory[0xDC04]+self->memory[0xDC05]*256)/clock_ratio;
+        self->frame_sampleperiod = (self->memory[0xDC04]+self->memory[0xDC05]*256)/self->clock_ratio;
     } else {
-        frame_sampleperiod = self->samplerate/PAL_FRAMERATE;  //Vsync timing
+        self->frame_sampleperiod = self->samplerate/PAL_FRAMERATE;  //Vsync timing
     }
     //frame_sampleperiod = (memory[0xDC05]!=0 || (!timermode[subtune] && playaddf))? samplerate/PAL_FRAMERATE : (memory[0xDC04] + memory[0xDC05]*256) / clock_ratio; 
     if(self->playaddf==0) {
@@ -98,7 +74,7 @@ void init(CsidPlayer* self, byte subtune) {
         if (self->playaddr>=0xE000 && self->memory[1]==0x37) self->memory[1]=0x35;
     }
     initCPU(self, self->playaddr);
-    framecnt=1;
+    self->framecnt=1;
     self->finished=0;
     self->CPUtime=0;
     self->dynCIA=0;
@@ -109,9 +85,9 @@ void libcsid_render(CsidPlayer* self, signed short *stream, int numSamples) {
     
     for(i = 0; i < numSamples; i++) {
         output = 0;
-        framecnt--;
-        if (framecnt<=0) {
-            framecnt=frame_sampleperiod;
+        self->framecnt--;
+        if (self->framecnt<=0) {
+            self->framecnt=self->frame_sampleperiod;
             self->finished=0;
             self->PC=self->playaddr;
             self->SP=0xFF;
@@ -127,7 +103,7 @@ void libcsid_render(CsidPlayer* self, signed short *stream, int numSamples) {
                      self->finished=1;
                  }
                  if ( (self->addr==0xDC05 || self->addr==0xDC04) && (self->memory[1]&3) && self->timermode[self->curSubtune] ) {
-                     frame_sampleperiod = (self->memory[0xDC04] + self->memory[0xDC05]*256) / clock_ratio;  //dynamic CIA-setting (Galway/Rubicon workaround)
+                     self->frame_sampleperiod = (self->memory[0xDC04] + self->memory[0xDC05]*256) / self->clock_ratio;  //dynamic CIA-setting (Galway/Rubicon workaround)
                      self->dynCIA=1;
                  }
                  if(self->storadd>=0xD420 && self->storadd<0xD800 && (self->memory[1]&3)) {  //CJ in the USA workaround (writing above $d420, except SID2/SID3)
@@ -141,7 +117,7 @@ void libcsid_render(CsidPlayer* self, signed short *stream, int numSamples) {
          output /= self->sampleratio;
         #else
          if (self->finished==0) { 
-             while (self->CPUtime<=clock_ratio) {
+             while (self->CPUtime<=self->clock_ratio) {
                  self->pPC=self->PC;
                  //RTS,RTI and IRQ player ROM return handling
                  if (CPU(self)>=0xFE || ( (self->memory[1]&3)>1 && self->pPC<0xE000 && (self->PC==0xEA31 || self->PC==0xEA81) ) ) {
@@ -151,7 +127,7 @@ void libcsid_render(CsidPlayer* self, signed short *stream, int numSamples) {
                      self->CPUtime+=self->cycles;
                  }
                  if ( (self->addr==0xDC05 || self->addr==0xDC04) && (self->memory[1]&3) && self->timermode[self->curSubtune] ) {
-                     frame_sampleperiod = (self->memory[0xDC04] + self->memory[0xDC05]*256) / clock_ratio;  //dynamic CIA-setting (Galway/Rubicon workaround)
+                     self->frame_sampleperiod = (self->memory[0xDC04] + self->memory[0xDC05]*256) / self->clock_ratio;  //dynamic CIA-setting (Galway/Rubicon workaround)
                      self->dynCIA=1;
                  }
                  if(self->storadd>=0xD420 && self->storadd<0xD800 && (self->memory[1]&3)) {  //CJ in the USA workaround (writing above $d420, except SID2/SID3)
@@ -164,7 +140,7 @@ void libcsid_render(CsidPlayer* self, signed short *stream, int numSamples) {
                  if(self->addr==0xD40B && !(self->memory[0xD40B]&GATE_BITMASK)) self->ADSRstate[1]&=0x3E;
                  if(self->addr==0xD412 && !(self->memory[0xD412]&GATE_BITMASK)) self->ADSRstate[2]&=0x3E;
              }
-             self->CPUtime-=clock_ratio;
+             self->CPUtime-=self->clock_ratio;
          }
          for (k=0; k<self->SIDamount; k++) output += SID(self, k, self->SID_address[k]);
         #endif
@@ -711,7 +687,7 @@ void initSID(CsidPlayer* self) {
     for(i=0xDE00;i<=0xDFFF;i++) self->memory[i]=0;
     for(i=0;i<9;i++) {
         self->ADSRstate[i]=HOLDZERO_BITMASK;
-        ratecnt[i] = 0;
+        self->ratecnt[i] = 0;
         self->envcnt[i] = 0;
         self->expcnt[i] = 0;
     } 
@@ -723,26 +699,26 @@ void cSID_init(CsidPlayer* self, int samplerate) {
     cap_6581_reciprocal = -1000000/CAP_6581;
     cutoff_steepness_6581 = FILTER_DARKNESS_6581*(2048.0-VCR_FET_TRESHOLD);
     #ifdef LIBCSID_FULL
-     clock_ratio = round(CLOCK_CPU_PAL/samplerate);
-     cutoff_ratio_8580 = -2 * 3.14 * (12500.0 / 2048) / CLOCK_CPU_PAL;
-     cutoff_ratio_6581 = -2 * 3.14 * (20000.0 / 2048) / CLOCK_CPU_PAL;
-     cutoff_bias_6581 = 1 - exp( -2 * 3.14 * 220 / CLOCK_CPU_PAL ); //around 220Hz below treshold
+     self->clock_ratio = round(CLOCK_CPU_PAL/samplerate);
+     self->cutoff_ratio_8580 = -2 * 3.14 * (12500.0 / 2048) / CLOCK_CPU_PAL;
+     self->cutoff_ratio_6581 = -2 * 3.14 * (20000.0 / 2048) / CLOCK_CPU_PAL;
+     self->cutoff_bias_6581 = 1 - exp( -2 * 3.14 * 220 / CLOCK_CPU_PAL ); //around 220Hz below treshold
      
      createCombinedWF(TriSaw_8580, 0.5, 2.2, 0.9);
      createCombinedWF(PulseSaw_8580, 0.23, 1.27, 0.55);
      createCombinedWF(PulseTriSaw_8580, 0.5, 1.6, 0.8);
     #else
-     clock_ratio = CLOCK_CPU_PAL/samplerate;
-     if (clock_ratio>9) {
-         ADSRperiods[0] = clock_ratio;
-         ADSRstep[0] = ceil(clock_ratio/9.0);
+     self->clock_ratio = CLOCK_CPU_PAL/samplerate;
+     if (self->clock_ratio>9) {
+         self->period0 = self->clock_ratio;
+         self->step0 = ceil(self->clock_ratio/9.0);
      } else {
-         ADSRperiods[0] = 9.0;
-         ADSRstep[0] = 1;
+         self->period0 = 9.0;
+         self->step0 = 1;
      }
-     cutoff_ratio_8580 = -2 * 3.14 * (12500 / 2048) / samplerate;
-     cutoff_ratio_6581 = -2 * 3.14 * (20000.0 / 2048) / samplerate;
-     cutoff_bias_6581  = 1 - exp( -2 * 3.14 * 220 / samplerate ); //around 220Hz below treshold
+     self->cutoff_ratio_8580 = -2 * 3.14 * (12500 / 2048) / samplerate;
+     self->cutoff_ratio_6581 = -2 * 3.14 * (20000.0 / 2048) / samplerate;
+     self->cutoff_bias_6581  = 1 - exp( -2 * 3.14 * 220 / samplerate ); //around 220Hz below treshold
      
      createCombinedWF(TriSaw_8580, 0.8, 2.4, 0.64);
      createCombinedWF(PulseSaw_8580, 1.4, 1.9, 0.68);
@@ -752,9 +728,9 @@ void cSID_init(CsidPlayer* self, int samplerate) {
     for(i = 0; i < 9; i++) {
         self->ADSRstate[i] = HOLDZERO_BITMASK;
         self->envcnt[i] = 0;
-        ratecnt[i] = 0; 
-        phaseaccu[i] = 0;
-        prevaccu[i] = 0;
+        self->ratecnt[i] = 0; 
+        self->phaseaccu[i] = 0;
+        self->prevaccu[i] = 0;
         self->expcnt[i] = 0; 
         self->noise_LFSR[i] = 0x7FFFFF;
         self->prevwfout[i] = 0;
@@ -829,7 +805,7 @@ int SID(CsidPlayer* self, char sidNum, unsigned int baseaddr) {
      unsigned int period;
     #else
      #define INTERNAL_RATE self->samplerate
-     #define INTERNAL_RATIO clock_ratio
+     #define INTERNAL_RATIO self->clock_ratio
      float period;
      float ftmp;
     #endif
@@ -867,20 +843,26 @@ int SID(CsidPlayer* self, char sidNum, unsigned int baseaddr) {
         } else {
             step = SR & 0xF;
         }
-        period = ADSRperiods[step];
 
         #ifdef LIBCSID_FULL
+         period = ADSRperiods[step];
          step = 1;
         #else
+         if (step == 0) {
+             period = self->period0;
+             step = self->step0;
+         } else {
+             period = ADSRperiods[step];
+             step = 1;
+         }
          self->prevSR[channel] = SR; //if(SR&0xF) ratecnt[channel]+=5;  //assume SR->GATE write order: workaround to have crisp soundstarts by triggering delay-bug
-         step = ADSRstep[step];
         #endif
 
-        ratecnt[channel] += INTERNAL_RATIO;
-        //ratecnt[channel] &= 0x7FFF;
-        if (ratecnt[channel] >= 0x8000) ratecnt[channel] -= 0x8000; //can wrap around (ADSR delay-bug: short 1st frame)
-        if (ratecnt[channel] >= period && ratecnt[channel] < period + INTERNAL_RATIO && trig == 0) { //ratecounter shot (matches rateperiod) (in genuine SID ratecounter is LFSR)
-            ratecnt[channel] -= period; //compensation for timing instead of simply setting 0 on rate-counter overload
+        self->ratecnt[channel] += INTERNAL_RATIO;
+        //self->ratecnt[channel] &= 0x7FFF;
+        if (self->ratecnt[channel] >= 0x8000) self->ratecnt[channel] -= 0x8000; //can wrap around (ADSR delay-bug: short 1st frame)
+        if (self->ratecnt[channel] >= period && self->ratecnt[channel] < period + INTERNAL_RATIO && trig == 0) { //ratecounter shot (matches rateperiod) (in genuine SID ratecounter is LFSR)
+            self->ratecnt[channel] -= period; //compensation for timing instead of simply setting 0 on rate-counter overload
             if ((self->ADSRstate[channel] & ATTACK_BITMASK) || ++self->expcnt[channel] == ADSR_exptable[self->envcnt[channel]]) {
                 self->expcnt[channel] = 0; 
                 if (!(self->ADSRstate[channel] & HOLDZERO_BITMASK)) {
@@ -909,19 +891,19 @@ int SID(CsidPlayer* self, char sidNum, unsigned int baseaddr) {
         wf = ctrl & 0xF0;
         accuadd = (vReg[0] + vReg[1] * 256) * INTERNAL_RATIO;
         if (test || ((ctrl & SYNC_BITMASK) && self->sourceMSBrise[sidNum])) {
-            phaseaccu[channel] = 0;
+            self->phaseaccu[channel] = 0;
         } else {
-            phaseaccu[channel] += accuadd;
-            if (phaseaccu[channel] > 0xFFFFFF) phaseaccu[channel] -= 0x1000000;
-            phaseaccu[channel] &= 0xFFFFFF;
+            self->phaseaccu[channel] += accuadd;
+            if (self->phaseaccu[channel] > 0xFFFFFF) self->phaseaccu[channel] -= 0x1000000;
+            self->phaseaccu[channel] &= 0xFFFFFF;
         }
-        MSB = phaseaccu[channel] & 0x800000;
-        self->sourceMSBrise[sidNum] = (MSB > (prevaccu[channel] & 0x800000)) ? 1 : 0;
+        MSB = self->phaseaccu[channel] & 0x800000;
+        self->sourceMSBrise[sidNum] = (MSB > (self->prevaccu[channel] & 0x800000)) ? 1 : 0;
         if (wf & NOISE_BITMASK) { //noise waveform
             int tmp = self->noise_LFSR[channel];
 
             //WARN: csid-full does not check for "|| accuadd >= 0x100000"
-            if (((phaseaccu[channel] & 0x100000) != (prevaccu[channel] & 0x100000)) || accuadd >= 0x100000) {
+            if (((self->phaseaccu[channel] & 0x100000) != (self->prevaccu[channel] & 0x100000)) || accuadd >= 0x100000) {
                 //clock LFSR all time if clockrate exceeds observable at given samplerate
                 tmp = ((tmp << 1) + (((tmp & 0x400000) ^ ((tmp & 0x20000) << 5)) ? 1 : test)) & 0x7FFFFF;
                 self->noise_LFSR[channel] = tmp;
@@ -940,7 +922,7 @@ int SID(CsidPlayer* self, char sidNum, unsigned int baseaddr) {
              if (pw > tmp) pw = tmp;
             #endif
 
-            tmp = phaseaccu[channel] >> 8;
+            tmp = self->phaseaccu[channel] >> 8;
             if (wf == PULSE_BITMASK) { //simple pulse
                 #ifdef LIBCSID_FULL
                  if (test || tmp>=pw) { //rising edge
@@ -970,7 +952,7 @@ int SID(CsidPlayer* self, char sidNum, unsigned int baseaddr) {
                     if (wf & SAW_BITMASK) { //pulse+saw+triangle (waveform nearly identical to tri+saw)
                         wfout = wfout ? combinedWF(self, sidNum, channel, PulseTriSaw_8580, tmp >> 4, 1, vReg[1]) : 0;
                     } else { //pulse+triangle
-                        tmp = phaseaccu[channel] ^ (ctrl & RING_BITMASK ? self->sourceMSB[sidNum] : 0);
+                        tmp = self->phaseaccu[channel] ^ (ctrl & RING_BITMASK ? self->sourceMSB[sidNum] : 0);
                         wfout = wfout ? combinedWF(self, sidNum, channel, PulseSaw_8580, (tmp ^ (tmp & 0x800000 ? 0xFFFFFF : 0)) >> 11, 0, vReg[1]) : 0;
                     }
                 } else if (wf & SAW_BITMASK) { //pulse+saw
@@ -978,7 +960,7 @@ int SID(CsidPlayer* self, char sidNum, unsigned int baseaddr) {
                 }
             }
         } else if (wf & SAW_BITMASK) { //saw
-            wfout = phaseaccu[channel] >> 8; //this aliases at high pitch when not oversampled
+            wfout = self->phaseaccu[channel] >> 8; //this aliases at high pitch when not oversampled
             if (wf & TRI_BITMASK) { //saw+triangle
                 wfout = combinedWF(self, sidNum, channel, TriSaw_8580, wfout >> 4, 1, vReg[1]);
             } else { //bandlimited saw
@@ -989,7 +971,7 @@ int SID(CsidPlayer* self, char sidNum, unsigned int baseaddr) {
                 #endif
             }
         } else if (wf & TRI_BITMASK) { //triangle, doesn't need antialias so much
-            int tmp = phaseaccu[channel] ^ (ctrl & RING_BITMASK ? self->sourceMSB[sidNum] : 0);
+            int tmp = self->phaseaccu[channel] ^ (ctrl & RING_BITMASK ? self->sourceMSB[sidNum] : 0);
             wfout = (tmp ^ (tmp & 0x800000 ? 0xFFFFFF : 0)) >> 7;
         }
         wfout&=0xFFFF;
@@ -999,7 +981,7 @@ int SID(CsidPlayer* self, char sidNum, unsigned int baseaddr) {
         } else {
             wfout = self->prevwfout[channel];
         }
-        prevaccu[channel] = phaseaccu[channel];
+        self->prevaccu[channel] = self->phaseaccu[channel];
         self->sourceMSB[sidNum] = MSB; //(So the decay is not an exact value. Anyway, we just simply keep the value to avoid clicks and support SounDemon digi later...)
 
         //routing the channel signal to either the filter or the unfiltered master output depending on filter-switch SID-registers
@@ -1022,12 +1004,12 @@ int SID(CsidPlayer* self, char sidNum, unsigned int baseaddr) {
      //calculate cutoff and resonance curves only at samplerate is still adequate and reduces CPU stress of frequent float calculations
      self->filterctrl_prescaler[sidNum]--;
      if (self->filterctrl_prescaler[sidNum]<=0) {
-         self->filterctrl_prescaler[sidNum]=clock_ratio;
+         self->filterctrl_prescaler[sidNum]=self->clock_ratio;
     #endif
         self->cutoff[sidNum] = 2 + sReg[0x16] * 8 + (sReg[0x15] & 7); //WARN: csid-light does not "2 +", why?
         if (self->SID_model[sidNum] == SIDMODEL_8580) {
             self->resonance[sidNum] = ( pow(2, ((4 - (sReg[0x17] >> 4)) / 8.0)) ) * SCALE_RESO;
-            self->cutoff[sidNum] = ( 1 - exp((self->cutoff[sidNum]+2) * cutoff_ratio_8580) ) * SCALE_CUTOFF; //linear curve by resistor-ladder VCR
+            self->cutoff[sidNum] = ( 1 - exp((self->cutoff[sidNum]+2) * self->cutoff_ratio_8580) ) * SCALE_CUTOFF; //linear curve by resistor-ladder VCR
         } else { //6581
             self->resonance[sidNum] = ( (sReg[0x17] > 0x5F) ? 8.0 / (sReg[0x17] >> 4) : 1.41 ) * SCALE_RESO;
             #if 1
@@ -1038,7 +1020,7 @@ int SID(CsidPlayer* self, char sidNum, unsigned int baseaddr) {
              rDS_VCR_FET = self->cutoff[sidNum]<=VCR_FET_TRESHOLD ? 100000000.0 : cutoff_steepness_6581/(self->cutoff[sidNum]-VCR_FET_TRESHOLD);
              self->cutoff[sidNum] = ( 1 - exp( cap_6581_reciprocal / (VCR_SHUNT_6581*rDS_VCR_FET/(VCR_SHUNT_6581+rDS_VCR_FET)) / INTERNAL_RATE ) ) * SCALE_CUTOFF; //curve with 1.5MOhm VCR parallel Rshunt emulation
             #else
-             self->cutoff[sidNum] = ( cutoff_bias_6581 + ( (self->cutoff[sidNum] < 192) ? 0 : 1 - exp((self->cutoff[sidNum]-192) * cutoff_ratio_6581) )  ) * SCALE_CUTOFF;
+             self->cutoff[sidNum] = ( self->cutoff_bias_6581 + ( (self->cutoff[sidNum] < 192) ? 0 : 1 - exp((self->cutoff[sidNum]-192) * self->cutoff_ratio_6581) )  ) * SCALE_CUTOFF;
             #endif
         }
     #ifdef LIBCSID_FULL
@@ -1119,8 +1101,8 @@ unsigned int combinedWF(CsidPlayer* self, char num, char channel, unsigned int* 
     #else
      float addf = 0.6+0.4/freqh;
      
-     prevwavdata[channel] = wfarray[index]*addf + prevwavdata[channel]*(1.0-addf);
-     return prevwavdata[channel];
+     self->prevwavdata[channel] = wfarray[index]*addf + self->prevwavdata[channel]*(1.0-addf);
+     return self->prevwavdata[channel];
     #endif
 }
 
