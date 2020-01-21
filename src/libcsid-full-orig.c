@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <math.h>
 
-#include "libcsid.h"
+#include "libcsid-orig.h"
 
 typedef unsigned char byte;
 typedef unsigned char Uint8;

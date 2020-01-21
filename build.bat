@@ -12,8 +12,8 @@ set link=-lwinmm
 del csidlight.exe
 del csidfull.exe
 pushd src
-gcc -o ..\csidfullorig.exe main.c tinywinmm.c libcsid-full-orig.c %opts% %link% 2>   ..\errfullorig.log
-gcc -o ..\csidlightorig.exe main.c tinywinmm.c libcsid-light-orig.c %opts% %link% 2> ..\errlightorig.log
+gcc -o ..\csidfull.exe  main.c -DLIBCSID_FULL tinywinmm.c libcsid.c %opts% %link% 2> ..\errfull.log
 gcc -o ..\csidlight.exe main.c tinywinmm.c libcsid.c %opts% %link% 2> ..\errlight.log
-gcc -o ..\csidfull.exe main.c -DLIBCSID_FULL tinywinmm.c libcsid.c %opts% %link% 2> ..\errfull.log
+gcc -o ..\csidfullorig.exe  main-orig.c tinywinmm.c libcsid-full-orig.c %opts% %link% 2>   ..\errfullorig.log
+gcc -o ..\csidlightorig.exe main-orig.c tinywinmm.c libcsid-light-orig.c %opts% %link% 2> ..\errlightorig.log
 popd

@@ -8,10 +8,8 @@
 #include <conio.h>
 #include <windows.h>
 
-#include "libcsid.h"
+#include "libcsid-orig.h"
 #include "tinywinmm.h"
-
-CsidPlayer cspl = {};
 
 int* loadfile(char* name, int* buflen) {
     char * buf;
@@ -38,10 +36,6 @@ int* loadfile(char* name, int* buflen) {
     return buf;
 }
 
-void renderTune(signed short *_output, int _numsamples) {
-    libcsid_render(&cspl, _output, _numsamples);
-}
-
 int main(int argc, char *argv[]) {
     char* buf; int buflen;
     FILE *in;
@@ -55,9 +49,9 @@ int main(int argc, char *argv[]) {
     if (argc >= 3) subtune = atoi(argv[2]);
     if (argc >= 4) prefmodel = atoi(argv[3]);
     if (prefmodel != SIDMODEL_8580 && prefmodel != SIDMODEL_6581) prefmodel = -1;
-    libcsid_init(&cspl, SAMPRATE, prefmodel);
-    libcsid_load(&cspl, buf, buflen, subtune);
-    if (!openMixer(SAMPRATE, 16, 1, &renderTune)) goto ERR;
+    libcsid_init(SAMPRATE, prefmodel);
+    libcsid_load(buf, buflen, subtune);
+    if (!openMixer(SAMPRATE, 16, 1, &libcsid_render)) goto ERR;
     subtune_total = libcsid_getsubtunenum();
     printf("Press ESC to stop.\n");
     
@@ -73,7 +67,7 @@ int main(int argc, char *argv[]) {
                 if (oldsub != subtune) {
                     printf("Playing subtune %i / %i\n", subtune+1, subtune_total);
                     enterCritical();
-                    libcsid_load(&cspl, buf, buflen, subtune);
+                    libcsid_load(buf, buflen, subtune);
                     leaveCritical();
                 }
             }
