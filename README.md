@@ -2,7 +2,7 @@
 
 Features compared to original CSID codebase
 - integrated csid-light filter into csid-full.
-- csid-light and csid-full are now (mesilly) merged into one codebase.
+- csid-light and csid-full are now (mesilly) merged into one codebase, separated by define.
 - code is re-entrant
 
 TODO
